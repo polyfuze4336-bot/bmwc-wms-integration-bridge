@@ -188,10 +188,31 @@
         }
       },
 
+      "Compose_EnqueueSuccess_Telemetry": {
+        "type": "Compose",
+        "runAfter": {
+          "Send_To_Service_Bus": ["Succeeded"]
+        },
+        "description": "Structured success log event — mirrors the pattern used by wms-soap-dispatcher for WMS_DISPATCH_SUCCESS. Emitted on every successful enqueue so KQL queries can measure ingress throughput, correlate with downstream dispatch events, and calculate overall SLA compliance.",
+        "inputs": {
+          "event":           "ENQUEUE_SUCCESS",
+          "correlationId":   "@{variables('correlationId')}",
+          "orderId":         "@{body('Parse_BMWC_Order')?['orderId']}",
+          "customerId":      "@{body('Parse_BMWC_Order')?['customerId']}",
+          "warehouseCode":   "@{body('Parse_BMWC_Order')?['warehouseCode']}",
+          "priority":        "@{coalesce(body('Parse_BMWC_Order')?['priority'], 'STANDARD')}",
+          "queueName":       "@{parameters('ServiceBusQueueName')}",
+          "messageId":       "@{body('Parse_BMWC_Order')?['orderId']}",
+          "workflowRunId":   "@{workflow()['run']['name']}",
+          "schemaVersion":   "1.0",
+          "enqueuedAtUtc":   "@{utcNow()}"
+        }
+      },
+
       "Response_202_Accepted": {
         "type": "Response",
         "runAfter": {
-          "Send_To_Service_Bus": ["Succeeded"]
+          "Compose_EnqueueSuccess_Telemetry": ["Succeeded"]
         },
         "description": "Immediate 202 — fire-and-forget confirmed. BMWC client must use correlationId + orderId to poll status; no synchronous WMS result is available.",
         "inputs": {
