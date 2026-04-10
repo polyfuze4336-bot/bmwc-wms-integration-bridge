@@ -31,7 +31,7 @@ param messageTtl string = 'PT4H'
 param maxDeliveryCount int = 5
 
 @description('Message lock duration. Must exceed the entire retry chain. Default PT10M.')
-param lockDuration string = 'PT10M'
+param lockDuration string = 'PT5M'
 
 resource serviceBus 'Microsoft.ServiceBus/namespaces@2022-10-01-preview' = {
   name: name

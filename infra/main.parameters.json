@@ -12,25 +12,25 @@
     "wmsUsername":            { "value": "${WMS_USERNAME}" },
     "wmsPassword":            { "value": "${WMS_PASSWORD}" },
 
-    "allowedClientIps":       { "value": "${APIM_ALLOWED_IPS}" },
-    "apimSamplingPercentage": { "value": "${APIM_SAMPLING_PERCENTAGE}" },
-    "apimRateLimitCalls":     { "value": "${APIM_RATE_LIMIT_CALLS}" },
-    "apimRateLimitPeriod":    { "value": "${APIM_RATE_LIMIT_PERIOD}" },
-    "apimQuotaCalls":         { "value": "${APIM_QUOTA_CALLS}" },
-    "apimQuotaPeriod":        { "value": "${APIM_QUOTA_PERIOD}" },
+    "allowedClientIps":          { "value": [] },
+    "apimSamplingPercentage":    { "value": 100 },
+    "apimRateLimitCalls":        { "value": 100 },
+    "apimRateLimitPeriod":       { "value": 60 },
+    "apimQuotaCalls":            { "value": 10000 },
+    "apimQuotaPeriod":           { "value": 604800 },
 
-    "inboundQueueName":       { "value": "${SB_INBOUND_QUEUE_NAME}" },
-    "deadLetterQueueName":    { "value": "${SB_DLQ_QUEUE_NAME}" },
-    "messageTtl":             { "value": "${SB_MESSAGE_TTL}" },
-    "maxDeliveryCount":       { "value": "${SB_MAX_DELIVERY_COUNT}" },
-    "sbLockDuration":         { "value": "${SB_LOCK_DURATION}" },
+    "inboundQueueName":          { "value": "wms-inbound" },
+    "deadLetterQueueName":       { "value": "wms-dead-letter-review" },
+    "messageTtl":                { "value": "PT4H" },
+    "maxDeliveryCount":          { "value": 5 },
+    "sbLockDuration":            { "value": "PT5M" },
 
-    "logRetentionDays":       { "value": "${LOG_RETENTION_DAYS}" },
-    "logDailyQuotaGb":        { "value": "${LOG_DAILY_QUOTA_GB}" },
+    "logRetentionDays":          { "value": 30 },
+    "logDailyQuotaGb":           { "value": 1 },
 
-    "maxElasticWorkers":      { "value": "${LA_MAX_ELASTIC_WORKERS}" },
+    "maxElasticWorkers":         { "value": 3 },
 
-    "kvSoftDeleteRetentionDays": { "value": "${KV_SOFT_DELETE_DAYS}" },
-    "kvEnablePurgeProtection":   { "value": "${KV_PURGE_PROTECTION}" }
+    "kvSoftDeleteRetentionDays": { "value": 7 },
+    "kvEnablePurgeProtection":   { "value": false }
   }
 }

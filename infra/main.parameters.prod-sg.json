@@ -29,7 +29,7 @@
     "deadLetterQueueName":       { "value": "wms-dead-letter-review" },
     "messageTtl":                { "value": "PT8H" },
     "maxDeliveryCount":          { "value": 5 },
-    "sbLockDuration":            { "value": "PT10M" },
+    "sbLockDuration":            { "value": "PT5M" },
 
     "logRetentionDays":          { "value": 90 },
     "logDailyQuotaGb":           { "value": -1 },

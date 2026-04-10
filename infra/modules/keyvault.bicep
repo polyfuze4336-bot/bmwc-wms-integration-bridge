@@ -29,7 +29,7 @@ param logicAppSubnetId string
 param softDeleteRetentionDays int = 7
 
 @description('Purge protection prevents permanent deletion of the vault. Set true in production.')
-param enablePurgeProtection bool = false
+param enablePurgeProtection bool = true
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-02-01' = {
   name: name

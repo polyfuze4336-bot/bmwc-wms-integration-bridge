@@ -84,7 +84,7 @@ param messageTtl string = 'PT4H'
 param maxDeliveryCount int = 5
 
 @description('Service Bus message lock duration. Must exceed the worst-case exponential retry chain. Default PT10M (5.75 min chain + 4.25 min buffer).')
-param sbLockDuration string = 'PT10M'
+param sbLockDuration string = 'PT5M'
 
 // ── Log Analytics ─────────────────────────────────────────────────────────────
 @minValue(30)
@@ -108,7 +108,7 @@ param maxElasticWorkers int = 3
 param kvSoftDeleteRetentionDays int = 7
 
 @description('Enable Key Vault purge protection. Prevents accidental permanent deletion. Set true in production.')
-param kvEnablePurgeProtection bool = false
+param kvEnablePurgeProtection bool = true
 
 // ── Derived values ────────────────────────────────────────────────────────────
 // resourceToken is a short stable suffix that keeps names globally unique without being too long.
