@@ -1,0 +1,100 @@
+<!--
+  apim-policies/get-status-operation-policy.xml
+  ──────────────────────────────────────────────────────────────────────────────
+  Scope:    GET /bmwc/orders/{orderId}/status  (operation level)
+  Purpose:  Query WMS dispatch status for a previously submitted order
+
+  Demo implementation note:
+    This operation returns a MOCK response for the prototype.
+    A state store (e.g. Azure Table Storage or Cosmos DB, written to by
+    wms-soap-dispatcher on dispatch success/failure) is required for
+    production-accurate status responses.
+
+    Options for production:
+      A. Route to a dedicated Logic App that queries the state store
+      B. Route to an Azure Function with direct Table Storage / Cosmos query
+      C. Use APIM caching keyed on orderId (suitable if status is write-once)
+
+  Current demo behaviour:
+    Returns a canned 200 response containing the orderId from the path parameter
+    so the demo flow shows a complete round-trip without needing a state store.
+  ──────────────────────────────────────────────────────────────────────────────
+-->
+<policies>
+    <inbound>
+        <base />
+
+        <!-- Validate orderId path parameter — must be non-empty string.
+             Pattern ^[A-Z0-9\-]+$ matches BMWC order ID convention. -->
+        <choose>
+            <when condition="@(!Regex.IsMatch(context.Request.MatchedParameters[&quot;orderId&quot;], &quot;^[A-Za-z0-9\\-]{1,50}$&quot;))">
+                <return-response>
+                    <set-status code="400" reason="Bad Request" />
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-body>@{
+                        return new JObject(
+                            new JProperty("status", "VALIDATION_ERROR"),
+                            new JProperty("code", "INVALID_ORDER_ID"),
+                            new JProperty("message", "orderId path parameter must be 1–50 uppercase alphanumeric characters or hyphens"),
+                            new JProperty("correlationId", context.Request.Headers.GetValueOrDefault("X-Correlation-ID", context.RequestId.ToString())),
+                            new JProperty("timestamp", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))
+                        ).ToString();
+                    }</set-body>
+                </return-response>
+            </when>
+        </choose>
+
+        <!-- DEMO MODE: Return mock response directly from APIM.
+             Remove the <return-response> block below and uncomment
+             <set-backend-service> to wire to a real status Logic App. -->
+        <return-response>
+            <set-status code="200" reason="OK" />
+            <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+            </set-header>
+            <set-body>@{
+                var orderId = context.Request.MatchedParameters["orderId"];
+                return new JObject(
+                    new JProperty("orderId", orderId),
+                    new JProperty("status", "WMS_ACCEPTED"),
+                    new JProperty("wmsOrderId", string.Format("WMS-{0}-DEMO", DateTime.UtcNow.ToString("yyyyMMddHHmm"))),
+                    new JProperty("warehouseRef", string.Format("WH-SIN-{0}", orderId)),
+                    new JProperty("estimatedReadyDate", DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd")),
+                    new JProperty("message", "[DEMO] Mock status response — wire to state store for production"),
+                    new JProperty("correlationId", context.Request.Headers.GetValueOrDefault("X-Correlation-ID", context.RequestId.ToString())),
+                    new JProperty("enqueuedAtUtc", DateTime.UtcNow.AddMinutes(-5).ToString("yyyy-MM-ddTHH:mm:ssZ")),
+                    new JProperty("dispatchedAtUtc", DateTime.UtcNow.AddMinutes(-4).ToString("yyyy-MM-ddTHH:mm:ssZ"))
+                ).ToString();
+            }</set-body>
+        </return-response>
+
+        <!-- PRODUCTION: Uncomment to route to a status Logic App.
+             Replace {{la-status-url}} with the Named Value for the status workflow trigger.
+        <set-backend-service base-url="{{la-status-url}}" />
+        -->
+    </inbound>
+
+    <backend>
+        <base />
+    </backend>
+
+    <outbound>
+        <base />
+
+        <!-- Status queries can be briefly cached — avoids thundering-herd if
+             multiple systems poll the same orderId simultaneously.
+             Cache key = orderId path parameter.
+             TTL: 30 s — short enough to reflect near-real-time status. -->
+        <!--
+        <cache-store-value key="@(&quot;status-&quot; + context.Request.MatchedParameters[&quot;orderId&quot;])"
+                           value="@(context.Response.Body.As<String>(true))"
+                           duration="30" />
+        -->
+    </outbound>
+
+    <on-error>
+        <base />
+    </on-error>
+</policies>

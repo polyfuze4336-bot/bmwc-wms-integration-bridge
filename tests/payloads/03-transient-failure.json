@@ -1,0 +1,28 @@
+{
+  "_scenario": "TRANSIENT FAILURE — WMS temporarily down (connection timeout / 500)",
+  "_notes": "Use this payload with the WMS mock when the mock is stopped or configured to return HTTP 500. The wms-soap-dispatcher will retry 3× with exponential back-off (5s, 30s, 120s). After exhausting retries the message moves to the dead-letter queue and the dlq-monitor workflow emits a DLQ_ALERT_SUMMARY on the next 15-minute cycle. Expected outcome at APIM: 202 Accepted immediately (fire-and-forget ingress). Expected outcome in Log Analytics: WMS_SOAP_FAULT events, then message appears on Service Bus DLQ.",
+
+  "orderId": "ORD-2026-SGP-TRANSIENT-001",
+  "customerId": "CUST-BMWC-002",
+  "warehouseCode": "WH-SIN",
+  "orderDate": "2026-04-10T03:00:00Z",
+  "priority": "STANDARD",
+
+  "lines": [
+    {
+      "lineNo": 1,
+      "sku": "SKU-S-101",
+      "description": "Suspension Arm — Rear",
+      "quantity": 8,
+      "uom": "EA"
+    }
+  ],
+
+  "shipTo": {
+    "name": "BMWC Assembly Plant 1",
+    "address1": "Lot 5, Jalan Jubli Perak",
+    "city": "Shah Alam",
+    "country": "MY",
+    "postcode": "40150"
+  }
+}

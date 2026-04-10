@@ -1,0 +1,27 @@
+{
+  "_scenario": "INVALID REQUEST — orderId pattern violation (lowercase / special chars)",
+  "_notes": "The orderId field requires pattern ^[A-Z0-9\\-]+$ (uppercase alphanumeric and hyphens only). This payload uses a lowercase orderId which fails schema validation. Expected outcome: 400 Bad Request. Never reaches Service Bus. Demonstrates APIM / Logic App acting as a quality gateway.",
+
+  "orderId": "ord-2026-sgp-bad",
+  "customerId": "CUST-BMWC-001",
+  "warehouseCode": "WH-SIN",
+  "orderDate": "2026-04-10T02:00:00Z",
+  "priority": "STANDARD",
+
+  "lines": [
+    {
+      "lineNo": 1,
+      "sku": "SKU-W-001",
+      "description": "Wheel Assembly Type A",
+      "quantity": 50,
+      "uom": "EA"
+    }
+  ],
+
+  "shipTo": {
+    "name": "BMWC Assembly Plant 1",
+    "address1": "Lot 5, Jalan Jubli Perak",
+    "city": "Shah Alam",
+    "country": "MY"
+  }
+}

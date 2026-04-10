@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName":        { "value": "${AZURE_ENV_NAME}" },
+    "location":               { "value": "${AZURE_LOCATION}" },
+
+    "apimPublisherEmail":     { "value": "${APIM_PUBLISHER_EMAIL}" },
+    "apimPublisherName":      { "value": "${APIM_PUBLISHER_NAME}" },
+
+    "wmsSoapEndpoint":        { "value": "${WMS_SOAP_ENDPOINT}" },
+    "wmsUsername":            { "value": "${WMS_USERNAME}" },
+    "wmsPassword":            { "value": "${WMS_PASSWORD}" },
+
+    "allowedClientIps":       { "value": "${APIM_ALLOWED_IPS}" },
+    "apimSamplingPercentage": { "value": "${APIM_SAMPLING_PERCENTAGE}" },
+    "apimRateLimitCalls":     { "value": "${APIM_RATE_LIMIT_CALLS}" },
+    "apimRateLimitPeriod":    { "value": "${APIM_RATE_LIMIT_PERIOD}" },
+    "apimQuotaCalls":         { "value": "${APIM_QUOTA_CALLS}" },
+    "apimQuotaPeriod":        { "value": "${APIM_QUOTA_PERIOD}" },
+
+    "inboundQueueName":       { "value": "${SB_INBOUND_QUEUE_NAME}" },
+    "deadLetterQueueName":    { "value": "${SB_DLQ_QUEUE_NAME}" },
+    "messageTtl":             { "value": "${SB_MESSAGE_TTL}" },
+    "maxDeliveryCount":       { "value": "${SB_MAX_DELIVERY_COUNT}" },
+    "sbLockDuration":         { "value": "${SB_LOCK_DURATION}" },
+
+    "logRetentionDays":       { "value": "${LOG_RETENTION_DAYS}" },
+    "logDailyQuotaGb":        { "value": "${LOG_DAILY_QUOTA_GB}" },
+
+    "maxElasticWorkers":      { "value": "${LA_MAX_ELASTIC_WORKERS}" },
+
+    "kvSoftDeleteRetentionDays": { "value": "${KV_SOFT_DELETE_DAYS}" },
+    "kvEnablePurgeProtection":   { "value": "${KV_PURGE_PROTECTION}" }
+  }
+}

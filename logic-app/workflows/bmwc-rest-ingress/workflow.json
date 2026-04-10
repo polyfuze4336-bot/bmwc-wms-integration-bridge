@@ -1,0 +1,271 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+
+    "triggers": {
+      "HTTP_Ingest": {
+        "type": "Request",
+        "kind": "Http",
+        "operationOptions": "EnableSchemaValidation",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "required": ["orderId", "customerId", "warehouseCode", "orderDate", "lines"],
+            "additionalProperties": true,
+            "properties": {
+              "orderId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 50,
+                "description": "BMWC-assigned order identifier — used as Service Bus messageId for deduplication"
+              },
+              "customerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 50
+              },
+              "warehouseCode": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20,
+                "description": "Target WMS warehouse code, e.g. WH-SIN or WH-KUL"
+              },
+              "orderDate": {
+                "type": "string",
+                "description": "ISO 8601 date/time — will be normalised to UTC by workflow"
+              },
+              "priority": {
+                "type": "string",
+                "enum": ["STANDARD", "URGENT", "EXPEDITE"],
+                "default": "STANDARD"
+              },
+              "lines": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 500,
+                "items": {
+                  "type": "object",
+                  "required": ["lineNo", "sku", "quantity"],
+                  "properties": {
+                    "lineNo":      { "type": "integer", "minimum": 1 },
+                    "sku":         { "type": "string",  "minLength": 1 },
+                    "description": { "type": "string"  },
+                    "quantity":    { "type": "number",  "exclusiveMinimum": 0 },
+                    "uom":         { "type": "string",  "default": "EA" }
+                  }
+                }
+              },
+              "shipTo": {
+                "type": "object",
+                "required": ["name", "address1", "city", "country"],
+                "properties": {
+                  "name":     { "type": "string" },
+                  "address1": { "type": "string" },
+                  "city":     { "type": "string" },
+                  "country":  { "type": "string", "minLength": 2, "maxLength": 2 },
+                  "postcode": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "actions": {
+
+      "Init_CorrelationId": {
+        "type": "InitializeVariable",
+        "runAfter": {},
+        "description": "Use X-Correlation-ID from caller if present; generate new GUID otherwise. Propagated on every action, log entry, and response.",
+        "inputs": {
+          "variables": [
+            {
+              "name": "correlationId",
+              "type": "string",
+              "value": "@{coalesce(triggerOutputs()?['headers']?['X-Correlation-ID'], guid())}"
+            }
+          ]
+        }
+      },
+
+      "Init_NormalisedOrderDate": {
+        "type": "InitializeVariable",
+        "runAfter": {
+          "Init_CorrelationId": ["Succeeded"]
+        },
+        "description": "Normalise caller-supplied orderDate to UTC ISO 8601 string. If the caller sent a local timestamp, convertTimeZone ensures storage and routing always see UTC.",
+        "inputs": {
+          "variables": [
+            {
+              "name": "normalisedOrderDate",
+              "type": "string",
+              "value": "@{formatDateTime(convertTimeZone(coalesce(triggerBody()?['orderDate'], utcNow()), 'UTC', 'UTC'), 'yyyy-MM-ddTHH:mm:ssZ')}"
+            }
+          ]
+        }
+      },
+
+      "Parse_BMWC_Order": {
+        "type": "ParseJson",
+        "runAfter": {
+          "Init_NormalisedOrderDate": ["Succeeded"]
+        },
+        "description": "Deserialise trigger body against schema. Trigger-level schema validation (EnableSchemaValidation) already rejected invalid payloads — this step makes fields addressable in subsequent actions.",
+        "inputs": {
+          "content": "@triggerBody()",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "orderId":       { "type": "string"  },
+              "customerId":    { "type": "string"  },
+              "warehouseCode": { "type": "string"  },
+              "orderDate":     { "type": "string"  },
+              "priority":      { "type": "string"  },
+              "lines":         { "type": "array"   },
+              "shipTo":        { "type": "object"  }
+            }
+          }
+        }
+      },
+
+      "Compose_Enriched_Message": {
+        "type": "Compose",
+        "runAfter": {
+          "Parse_BMWC_Order": ["Succeeded"]
+        },
+        "description": "Assemble the canonical message that enters Service Bus. The _meta envelope carries all integration metadata; downstream workflows must not re-derive these fields.",
+        "inputs": {
+          "orderId":       "@{body('Parse_BMWC_Order')?['orderId']}",
+          "customerId":    "@{body('Parse_BMWC_Order')?['customerId']}",
+          "warehouseCode": "@{body('Parse_BMWC_Order')?['warehouseCode']}",
+          "orderDate":     "@{variables('normalisedOrderDate')}",
+          "priority":      "@{coalesce(body('Parse_BMWC_Order')?['priority'], 'STANDARD')}",
+          "lines":         "@body('Parse_BMWC_Order')?['lines']",
+          "shipTo":        "@body('Parse_BMWC_Order')?['shipTo']",
+          "_meta": {
+            "correlationId":  "@{variables('correlationId')}",
+            "enqueuedAtUtc":  "@{utcNow()}",
+            "source":         "BMWC",
+            "schemaVersion":  "1.0",
+            "workflowRunId":  "@{workflow()['run']['name']}"
+          }
+        }
+      },
+
+      "Send_To_Service_Bus": {
+        "type": "ServiceProvider",
+        "runAfter": {
+          "Compose_Enriched_Message": ["Succeeded"]
+        },
+        "description": "Enqueue enriched BMWC order to wms-inbound. messageId = orderId enables Service Bus duplicate detection (10-min window). UserProperties are indexed for server-side filtering and ops tooling.",
+        "inputs": {
+          "parameters": {
+            "entityName": "@parameters('ServiceBusQueueName')",
+            "message": {
+              "contentData":   "@string(outputs('Compose_Enriched_Message'))",
+              "contentType":   "application/json",
+              "messageId":     "@{body('Parse_BMWC_Order')?['orderId']}",
+              "label":         "BMWC.Order.v1",
+              "userProperties": {
+                "correlationId":  "@{variables('correlationId')}",
+                "orderId":        "@{body('Parse_BMWC_Order')?['orderId']}",
+                "customerId":     "@{body('Parse_BMWC_Order')?['customerId']}",
+                "warehouseCode":  "@{body('Parse_BMWC_Order')?['warehouseCode']}",
+                "priority":       "@{coalesce(body('Parse_BMWC_Order')?['priority'], 'STANDARD')}",
+                "schemaVersion":  "1.0"
+              }
+            }
+          },
+          "serviceProviderConfiguration": {
+            "connectionName":    "serviceBus",
+            "operationId":       "sendMessage",
+            "serviceProviderId": "/serviceProviders/serviceBus"
+          }
+        }
+      },
+
+      "Response_202_Accepted": {
+        "type": "Response",
+        "runAfter": {
+          "Send_To_Service_Bus": ["Succeeded"]
+        },
+        "description": "Immediate 202 — fire-and-forget confirmed. BMWC client must use correlationId + orderId to poll status; no synchronous WMS result is available.",
+        "inputs": {
+          "statusCode": 202,
+          "headers": {
+            "Content-Type":      "application/json",
+            "X-Correlation-ID":  "@{variables('correlationId')}",
+            "X-Workflow-Run-ID": "@{workflow()['run']['name']}"
+          },
+          "body": {
+            "status":        "QUEUED",
+            "message":       "Order accepted for asynchronous WMS dispatch",
+            "orderId":       "@{body('Parse_BMWC_Order')?['orderId']}",
+            "correlationId": "@{variables('correlationId')}",
+            "workflowRunId": "@{workflow()['run']['name']}",
+            "enqueuedAtUtc": "@{utcNow()}"
+          }
+        }
+      },
+
+      "Scope_EnqueueFailure": {
+        "type": "Scope",
+        "runAfter": {
+          "Send_To_Service_Bus": ["Failed", "TimedOut", "Skipped"]
+        },
+        "description": "Catch Service Bus send failures. Returns a deterministic 500 to APIM so BMWC knows the message was NOT queued. APIM policy can surface this as a 503 if preferred.",
+        "actions": {
+          "Compose_EnqueueError_Telemetry": {
+            "type": "Compose",
+            "runAfter": {},
+            "inputs": {
+              "event":         "ENQUEUE_FAILED",
+              "correlationId": "@{variables('correlationId')}",
+              "orderId":       "@{body('Parse_BMWC_Order')?['orderId']}",
+              "workflowRunId": "@{workflow()['run']['name']}",
+              "failedAtUtc":   "@{utcNow()}",
+              "errorCode":     "@{result('Send_To_Service_Bus')?[0]?['error']?['code']}",
+              "errorMessage":  "@{result('Send_To_Service_Bus')?[0]?['error']?['message']}"
+            }
+          },
+          "Response_500_EnqueueFailed": {
+            "type": "Response",
+            "runAfter": {
+              "Compose_EnqueueError_Telemetry": ["Succeeded"]
+            },
+            "inputs": {
+              "statusCode": 500,
+              "headers": {
+                "Content-Type":     "application/json",
+                "X-Correlation-ID": "@{variables('correlationId')}"
+              },
+              "body": {
+                "status":        "ERROR",
+                "message":       "Order could not be queued for WMS dispatch — please retry",
+                "orderId":       "@{body('Parse_BMWC_Order')?['orderId']}",
+                "correlationId": "@{variables('correlationId')}",
+                "failedAtUtc":   "@{utcNow()}"
+              }
+            }
+          }
+        }
+      }
+
+    },
+
+    "outputs": {},
+
+    "parameters": {
+      "ServiceBusQueueName": {
+        "type": "string",
+        "defaultValue": "wms-inbound"
+      }
+    }
+  },
+
+  "kind": "Stateful"
+}

@@ -1,0 +1,312 @@
+{
+  "info": {
+    "name": "BMWC → WMS Bridge — Demo & Integration Tests",
+    "_postman_id": "bmwc-wms-bridge-v1",
+    "description": "Customer-facing demo collection for the BMWC to WMS integration bridge on Azure Integration Services.\n\nCovers 7 scenarios:\n  1. Success — standard multi-line order\n  2. Success — URGENT order with GMT+8 timestamp (timezone normalisation demo)\n  3. Success — EXPEDITE order with lot-tracked and serialised items\n  4. Transient failure — WMS unavailable (demonstrate retry + DLQ path)\n  5. DLQ demo — permanent WMS fault, dead-letter queue consolidation\n  6. Invalid request — missing required fields (schema validation gate)\n  7. Idempotency — duplicate orderId within dedup window\n\nSetup:\n  1. Create an Environment named 'BMWC Demo' with the variables below.\n  2. Run request #0 (Health Check) to verify the mock WMS is running.\n  3. Work through requests 1–7 in sequence, observing outputs at each layer.\n\nRequired environment variables:\n  apimGatewayUrl      — https://<your-apim>.azure-api.net\n  subscriptionKey     — APIM subscription key (from APIM portal → Subscriptions)\n  mockWmsUrl          — http://localhost:8080  (or container URL)\n  correlationId       — auto-set by Pre-request Script in each request",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+
+  "variable": [
+    { "key": "apimGatewayUrl",  "value": "https://apim-bmwc-demo.azure-api.net", "type": "string" },
+    { "key": "subscriptionKey", "value": "REPLACE_WITH_YOUR_APIM_SUBSCRIPTION_KEY", "type": "string" },
+    { "key": "mockWmsUrl",      "value": "http://localhost:8080", "type": "string" }
+  ],
+
+  "item": [
+    {
+      "name": "00 — Health: WMS Mock WSDL",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{mockWmsUrl}}/WMSService.svc?wsdl",
+          "host": ["{{mockWmsUrl}}"],
+          "path": ["WMSService.svc"],
+          "query": [{ "key": "wsdl", "value": "" }]
+        },
+        "description": "Verify the WMS mock server is running. Expect 200 OK with a WSDL XML body.\n\nPresenter note: This simulates querying the real WMS endpoint for its service contract. In production the WSDL URL comes from the WMS vendor and is hard-coded in the wms-soap-dispatcher workflow."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('WMS mock is healthy and returns WSDL', function() {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.text()).to.include('WMSService');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "01 — Submit Standard Order (SUCCESS PATH)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type",           "value": "application/json" },
+          { "key": "Ocp-Apim-Subscription-Key", "value": "{{subscriptionKey}}" },
+          { "key": "X-Correlation-ID",       "value": "{{correlationId}}" }
+        ],
+        "url": {
+          "raw": "{{apimGatewayUrl}}/bmwc/orders",
+          "host": ["{{apimGatewayUrl}}"],
+          "path": ["bmwc", "orders"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"ORD-2026-SGP-001\",\n  \"customerId\": \"CUST-BMWC-001\",\n  \"warehouseCode\": \"WH-SIN\",\n  \"orderDate\": \"2026-04-10T02:00:00Z\",\n  \"priority\": \"STANDARD\",\n  \"requestedDeliveryDate\": \"2026-04-11T00:00:00Z\",\n  \"customerReference\": \"PO-BMWC-2026-045\",\n  \"notes\": \"Handle with care — fragile components\",\n  \"lines\": [\n    { \"lineNo\": 1, \"sku\": \"SKU-W-001\", \"description\": \"Wheel Assembly Type A\", \"quantity\": 50, \"uom\": \"EA\" },\n    { \"lineNo\": 2, \"sku\": \"SKU-T-022\", \"description\": \"Tyre XR 235/55R18\", \"quantity\": 200, \"uom\": \"EA\" },\n    { \"lineNo\": 3, \"sku\": \"SKU-E-055\", \"description\": \"Engine Gasket Set\", \"quantity\": 10, \"uom\": \"SET\", \"lotNumber\": \"LOT-2026-003\" }\n  ],\n  \"shipTo\": {\n    \"name\": \"BMWC Assembly Plant 1\",\n    \"address1\": \"Lot 5, Jalan Jubli Perak\",\n    \"address2\": \"Kawasan Perindustrian\",\n    \"city\": \"Shah Alam\",\n    \"state\": \"Selangor\",\n    \"country\": \"MY\",\n    \"postcode\": \"40150\",\n    \"contactName\": \"Ahmad Fauzi\",\n    \"contactPhone\": \"+601112345678\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "PRIMARY HAPPY PATH\n\nA standard 3-line order with UTC timestamp and a lot-tracked item on line 3.\n\nExpected response: 202 Accepted with JSON body containing orderId and correlationId.\n\nWhat to show audience:\n  1. Response is 202 (not 200) — message accepted for async processing\n  2. X-Correlation-ID echoed in response header\n  3. Navigate to Service Bus → wms-inbound queue → Messages to show the enqueued message\n  4. Navigate to Logic App → bmwc-rest-ingress → Run History to show the run\n  5. Navigate to Logic App → wms-soap-dispatcher → Run History to show the WMS call\n  6. Navigate to Log Analytics → query WMS_DISPATCH_SUCCESS for this orderId"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "pm.environment.set('correlationId', 'demo-corr-' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Returns 202 Accepted', function() {",
+              "    pm.response.to.have.status(202);",
+              "});",
+              "pm.test('Response body contains orderId', function() {",
+              "    const json = pm.response.json();",
+              "    pm.expect(json).to.have.property('orderId', 'ORD-2026-SGP-001');",
+              "});",
+              "pm.test('Correlation ID echoed in response', function() {",
+              "    pm.expect(pm.response.headers.get('X-Correlation-ID')).to.equal(pm.environment.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "02 — Submit URGENT Order with GMT+8 Timestamp (TIMEZONE DEMO)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type",           "value": "application/json" },
+          { "key": "Ocp-Apim-Subscription-Key", "value": "{{subscriptionKey}}" },
+          { "key": "X-Correlation-ID",       "value": "{{correlationId}}" }
+        ],
+        "url": {
+          "raw": "{{apimGatewayUrl}}/bmwc/orders",
+          "host": ["{{apimGatewayUrl}}"],
+          "path": ["bmwc", "orders"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"ORD-2026-KLU-007\",\n  \"customerId\": \"CUST-BMWC-001\",\n  \"warehouseCode\": \"WH-KUL\",\n  \"orderDate\": \"2026-04-10T10:00:00+08:00\",\n  \"priority\": \"URGENT\",\n  \"requestedDeliveryDate\": \"2026-04-10T18:00:00+08:00\",\n  \"customerReference\": \"WO-2026-URGENT-007\",\n  \"notes\": \"URGENT — production line stoppage. Same-day dispatch required.\",\n  \"lines\": [\n    { \"lineNo\": 1, \"sku\": \"SKU-B-009\", \"description\": \"Brake Caliper Assembly — Front Left\", \"quantity\": 4, \"uom\": \"EA\" }\n  ],\n  \"shipTo\": {\n    \"name\": \"BMWC Assembly Plant 2 — Kuala Lumpur\",\n    \"address1\": \"Jalan Cheras KM12\",\n    \"city\": \"Kuala Lumpur\",\n    \"state\": \"Wilayah Persekutuan\",\n    \"country\": \"MY\",\n    \"postcode\": \"56000\",\n    \"contactName\": \"Lee Wei Ming\",\n    \"contactPhone\": \"+60312345678\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "TIMEZONE NORMALISATION DEMO\n\nThe caller submits orderDate as 2026-04-10T10:00:00+08:00 (10 AM Malaysian time).\nThe bmwc-rest-ingress workflow normalises this to UTC: 2026-04-10T02:00:00Z.\nThe Service Bus message and SOAP payload both use the UTC value.\n\nIn the reporting layer (Power BI / Workbook), timestamps are displayed as GMT+8 for human readability — but the raw value stored and transmitted is always UTC.\n\nWhat to show audience:\n  1. Page through Service Bus message body — show orderDate is 2026-04-10T02:00:00Z (UTC)\n  2. Open Log Analytics → AppTraces → show enqueuedAtUtc field\n  3. Open the optional reporting workbook — show the same event rendered as 10:00 AM MYT\n  4. Emphasise: single source of truth is UTC; GMT+8 is a display-only concern"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "pm.environment.set('correlationId', 'demo-tz-' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Returns 202 Accepted', function() {",
+              "    pm.response.to.have.status(202);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "03 — Submit EXPEDITE Order (Multi-SKU, lot + serial)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type",           "value": "application/json" },
+          { "key": "Ocp-Apim-Subscription-Key", "value": "{{subscriptionKey}}" },
+          { "key": "X-Correlation-ID",       "value": "{{correlationId}}" }
+        ],
+        "url": {
+          "raw": "{{apimGatewayUrl}}/bmwc/orders",
+          "host": ["{{apimGatewayUrl}}"],
+          "path": ["bmwc", "orders"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"ORD-2026-SGP-EXPEDITE-001\",\n  \"customerId\": \"CUST-BMWC-001\",\n  \"warehouseCode\": \"WH-SIN\",\n  \"orderDate\": \"2026-04-10T05:00:00Z\",\n  \"priority\": \"EXPEDITE\",\n  \"requestedDeliveryDate\": \"2026-04-10T14:00:00Z\",\n  \"customerReference\": \"PO-BMWC-2026-CRIT-001\",\n  \"notes\": \"EXPEDITE — critical production hold. Authorised by Plant Director.\",\n  \"lines\": [\n    { \"lineNo\": 1, \"sku\": \"SKU-E-055\", \"description\": \"Engine Gasket Set\", \"quantity\": 5, \"uom\": \"SET\", \"lotNumber\": \"LOT-2026-007\" },\n    { \"lineNo\": 2, \"sku\": \"SKU-V-014\", \"description\": \"Variable Timing Unit\", \"quantity\": 2, \"uom\": \"EA\", \"serialNumber\": \"VT2026-00012\" },\n    { \"lineNo\": 3, \"sku\": \"SKU-V-014\", \"description\": \"Variable Timing Unit\", \"quantity\": 2, \"uom\": \"EA\", \"serialNumber\": \"VT2026-00013\" }\n  ],\n  \"shipTo\": {\n    \"name\": \"BMWC Assembly Plant 1 — Urgent Dock\",\n    \"address1\": \"Lot 5, Jalan Jubli Perak\",\n    \"city\": \"Shah Alam\",\n    \"country\": \"MY\",\n    \"postcode\": \"40150\",\n    \"contactName\": \"Ahmad Fauzi\",\n    \"contactPhone\": \"+601112345678\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "EXPEDITE priority order with lot-tracked and serialised items.\n\nLines 2 and 3 each specify a serialNumber — the Liquid map passes these through to the WMS SOAP payload in <wms:SerialNumber> elements."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": { "exec": ["pm.environment.set('correlationId', 'demo-exp-' + Date.now());"] }
+        },
+        {
+          "listen": "test",
+          "script": { "exec": ["pm.test('Returns 202 Accepted', function() { pm.response.to.have.status(202); });"] }
+        }
+      ]
+    },
+
+    {
+      "name": "04 — Transient Failure Demo (stop WMS mock first)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type",           "value": "application/json" },
+          { "key": "Ocp-Apim-Subscription-Key", "value": "{{subscriptionKey}}" },
+          { "key": "X-Correlation-ID",       "value": "{{correlationId}}" }
+        ],
+        "url": {
+          "raw": "{{apimGatewayUrl}}/bmwc/orders",
+          "host": ["{{apimGatewayUrl}}"],
+          "path": ["bmwc", "orders"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"ORD-2026-SGP-TRANSIENT-001\",\n  \"customerId\": \"CUST-BMWC-002\",\n  \"warehouseCode\": \"WH-SIN\",\n  \"orderDate\": \"2026-04-10T03:00:00Z\",\n  \"priority\": \"STANDARD\",\n  \"lines\": [\n    { \"lineNo\": 1, \"sku\": \"SKU-S-101\", \"description\": \"Suspension Arm — Rear\", \"quantity\": 8, \"uom\": \"EA\" }\n  ],\n  \"shipTo\": {\n    \"name\": \"BMWC Assembly Plant 1\",\n    \"address1\": \"Lot 5, Jalan Jubli Perak\",\n    \"city\": \"Shah Alam\",\n    \"country\": \"MY\",\n    \"postcode\": \"40150\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "TRANSIENT FAILURE DEMO — PRE-STEP: Stop the WMS mock container before sending this request.\n\nSetup:\n  docker stop wms-soap-mock   (or kill the node process)\n\nExpected outcome:\n  1. APIM returns 202 immediately — ingress is fire-and-forget\n  2. Message lands on Service Bus wms-inbound queue\n  3. wms-soap-dispatcher picks up message, fails to connect to WMS\n  4. Logic App retries 3× with exponential back-off (visible in Run History)\n  5. After maxDeliveryCount attempts Service Bus moves message to DLQ\n  6. dlq-monitor fires on next 15-min schedule and logs DLQ_ALERT_SUMMARY\n\nRestore:\n  docker start wms-soap-mock\n  Then use the 'Resubmit from DLQ' Azure Portal feature or submit a new order with the same content."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": { "exec": ["pm.environment.set('correlationId', 'demo-fail-' + Date.now());"] }
+        },
+        {
+          "listen": "test",
+          "script": { "exec": ["pm.test('Returns 202 — ingress accepted even when WMS is down', function() { pm.response.to.have.status(202); });"] }
+        }
+      ]
+    },
+
+    {
+      "name": "05 — DLQ Demo (submit 3× with bad SKU)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type",           "value": "application/json" },
+          { "key": "Ocp-Apim-Subscription-Key", "value": "{{subscriptionKey}}" },
+          { "key": "X-Correlation-ID",       "value": "{{correlationId}}" }
+        ],
+        "url": {
+          "raw": "{{apimGatewayUrl}}/bmwc/orders",
+          "host": ["{{apimGatewayUrl}}"],
+          "path": ["bmwc", "orders"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"ORD-2026-DLQ-001\",\n  \"customerId\": \"CUST-BMWC-DLQ\",\n  \"warehouseCode\": \"WH-DLQ\",\n  \"orderDate\": \"2026-04-10T04:00:00Z\",\n  \"priority\": \"STANDARD\",\n  \"lines\": [\n    { \"lineNo\": 1, \"sku\": \"SKU-X-999\", \"description\": \"Unknown SKU — will be rejected by WMS\", \"quantity\": 1, \"uom\": \"EA\" }\n  ],\n  \"shipTo\": {\n    \"name\": \"Test Recipient — DLQ Demo\",\n    \"address1\": \"1 Integration Drive\",\n    \"city\": \"Singapore\",\n    \"country\": \"SG\",\n    \"postcode\": \"018989\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "DLQ DEMO — Submit this request 3 times, incrementing orderId each time:\n  ORD-2026-DLQ-001, ORD-2026-DLQ-002, ORD-2026-DLQ-003\n\nThe WMS mock is configured to return a SOAP Fault for warehouseCode 'WH-DLQ' or SKU 'SKU-X-999'.\n\nWhat to show:\n  1. Service Bus → wms-dead-letter-review queue — 3 messages appear\n  2. Log Analytics → AppTraces | where Properties.event == 'WMS_SOAP_FAULT'\n  3. Log Analytics → DLQ_ALERT_SUMMARY emitted by dlq-monitor (wait 15 min or trigger manually)\n  4. Azure Monitor alert fires (if action group wired)\n  5. Demonstrate 'Resubmit from DLQ' after fixing the SKU"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": { "exec": ["pm.environment.set('correlationId', 'demo-dlq-' + Date.now());"] }
+        },
+        {
+          "listen": "test",
+          "script": { "exec": ["pm.test('Returns 202 — message accepted', function() { pm.response.to.have.status(202); });"] }
+        }
+      ]
+    },
+
+    {
+      "name": "06 — Invalid Request: Missing required fields",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type",           "value": "application/json" },
+          { "key": "Ocp-Apim-Subscription-Key", "value": "{{subscriptionKey}}" },
+          { "key": "X-Correlation-ID",       "value": "{{correlationId}}" }
+        ],
+        "url": {
+          "raw": "{{apimGatewayUrl}}/bmwc/orders",
+          "host": ["{{apimGatewayUrl}}"],
+          "path": ["bmwc", "orders"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": \"CUST-BMWC-001\",\n  \"warehouseCode\": \"WH-SIN\",\n  \"orderDate\": \"2026-04-10T02:00:00Z\",\n  \"shipTo\": {\n    \"name\": \"BMWC Assembly Plant 1\",\n    \"address1\": \"Lot 5, Jalan Jubli Perak\",\n    \"city\": \"Shah Alam\",\n    \"country\": \"MY\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "SCHEMA VALIDATION GATE DEMO\n\nMissing: orderId (required) and lines (required array, min 1 item).\n\nExpected response: 400 Bad Request.\nMessage NEVER reaches Service Bus — the validation gate fires in the Logic App trigger.\n\nWhat to show:\n  1. Response is 400 with a validation error body\n  2. Service Bus queue message count does NOT increment\n  3. No run appears in wms-soap-dispatcher run history\n  4. Emphasise: only well-formed orders consume Azure resources"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": { "exec": ["pm.environment.set('correlationId', 'demo-invalid-' + Date.now());"] }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Returns 400 Bad Request', function() {",
+              "    pm.response.to.have.status(400);",
+              "});",
+              "pm.test('Error body references missing field', function() {",
+              "    const text = pm.response.text();",
+              "    pm.expect(text.toLowerCase()).to.include('orderid');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "07 — Idempotency: Duplicate orderId",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type",           "value": "application/json" },
+          { "key": "Ocp-Apim-Subscription-Key", "value": "{{subscriptionKey}}" },
+          { "key": "X-Correlation-ID",       "value": "{{correlationId}}" }
+        ],
+        "url": {
+          "raw": "{{apimGatewayUrl}}/bmwc/orders",
+          "host": ["{{apimGatewayUrl}}"],
+          "path": ["bmwc", "orders"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"ORD-2026-SGP-001\",\n  \"customerId\": \"CUST-BMWC-001\",\n  \"warehouseCode\": \"WH-SIN\",\n  \"orderDate\": \"2026-04-10T02:00:00Z\",\n  \"priority\": \"STANDARD\",\n  \"lines\": [\n    { \"lineNo\": 1, \"sku\": \"SKU-W-001\", \"description\": \"Wheel Assembly Type A\", \"quantity\": 50, \"uom\": \"EA\" }\n  ],\n  \"shipTo\": {\n    \"name\": \"BMWC Assembly Plant 1\",\n    \"address1\": \"Lot 5, Jalan Jubli Perak\",\n    \"city\": \"Shah Alam\",\n    \"country\": \"MY\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "IDEMPOTENCY DEMO\n\nSend after request #01 (within 10 minutes). Same orderId = ORD-2026-SGP-001.\nService Bus duplicate detection window is 10 minutes.\n\nExpected behaviour:\n  - APIM: 202 Accepted (ingress does not distinguish)\n  - Service Bus: message silently deduplicated — NOT re-delivered to dispatcher\n  - Log Analytics: no new ENQUEUE_SUCCESS event for this orderId after the first\n  - WMS: NOT called a second time\n\nWhat to show:\n  1. Service Bus → wms-inbound → Active Message Count does NOT go up\n  2. wms-soap-dispatcher run history shows no new run after the duplicate\n  3. Explain: orderId is the Service Bus messageId — guaranteed at-most-once delivery"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": { "exec": ["pm.environment.set('correlationId', 'demo-idem-' + Date.now());"] }
+        },
+        {
+          "listen": "test",
+          "script": { "exec": ["pm.test('Returns 202 Accepted', function() { pm.response.to.have.status(202); });"] }
+        }
+      ]
+    }
+  ]
+}

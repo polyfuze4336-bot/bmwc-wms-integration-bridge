@@ -1,0 +1,15 @@
+{
+  "_scenario": "INVALID REQUEST — Missing required fields (orderId + lines)",
+  "_notes": "The Logic App trigger has schema validation enabled. This payload omits 'orderId' (required string) and 'lines' (required array min 1). Expected outcome: Logic App returns 400 Bad Request synchronously with a validation error body. The message is never written to Service Bus. APIM passes the 400 upstream to the caller unchanged. Use this to demonstrate that the system gates upstream garbage before consuming Azure resources.",
+
+  "customerId": "CUST-BMWC-001",
+  "warehouseCode": "WH-SIN",
+  "orderDate": "2026-04-10T02:00:00Z",
+
+  "shipTo": {
+    "name": "BMWC Assembly Plant 1",
+    "address1": "Lot 5, Jalan Jubli Perak",
+    "city": "Shah Alam",
+    "country": "MY"
+  }
+}

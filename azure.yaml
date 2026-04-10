@@ -1,0 +1,23 @@
+name: bmwc-wms-bridge
+metadata:
+  template: bmwc-wms-bridge@1.0.0
+
+services:
+  wms-mock:
+    project: ./mocks/wms-soap-mock
+    language: js
+    host: containerapp
+
+hooks:
+  postprovision:
+    posix:
+      shell: sh
+      run: pwsh ./scripts/post-provision.ps1
+    windows:
+      shell: pwsh
+      run: ./scripts/post-provision.ps1
+
+infra:
+  provider: bicep
+  path: infra
+  module: main

@@ -1,0 +1,30 @@
+{
+  "$connections": {
+    "value": {}
+  },
+
+  "ServiceBusQueueName": {
+    "value": "wms-inbound",
+    "description": "Primary inbound queue name. Used by bmwc-rest-ingress (send) and wms-soap-dispatcher (receive)."
+  },
+
+  "WmsSoapEndpoint": {
+    "value": "@appsetting('WMS__SoapEndpoint')",
+    "description": "WMS SOAP service URL — resolved from Key Vault reference at runtime. For local dev: http://localhost:8080/WMSService.svc"
+  },
+
+  "WmsUsername": {
+    "value": "@appsetting('WMS__Username')",
+    "description": "WMS SOAP auth username — resolved from Key Vault reference."
+  },
+
+  "WmsPassword": {
+    "value": "@appsetting('WMS__Password')",
+    "description": "WMS SOAP auth password — resolved from Key Vault reference. Marked securestring in wms-soap-dispatcher workflow parameters."
+  },
+
+  "DlqAlertThreshold": {
+    "value": "1",
+    "description": "Minimum DLQ message count before dlq-monitor emits a DLQ_ALERT_SUMMARY log. Increase in production if occasional DLQ entries are acceptable."
+  }
+}

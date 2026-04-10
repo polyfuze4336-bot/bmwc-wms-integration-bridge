@@ -1,0 +1,145 @@
+### ──────────────────────────────────────────────────────────────
+### BMWC → WMS Bridge — Integration Tests
+### REST Client format (.http) — works in VS Code REST Client extension
+###
+### Variables: copy .env.example → .env and fill in values, OR
+###            set @apimGatewayUrl and @subscriptionKey inline below.
+### ──────────────────────────────────────────────────────────────
+
+@apimGatewayUrl = {{$dotenv APIM_GATEWAY_URL}}
+@subscriptionKey = {{$dotenv APIM_SUBSCRIPTION_KEY}}
+@correlationId = test-corr-{{$timestamp}}
+
+### ── 1. Health: WSDL available from WMS mock ─────────────────────────────
+GET http://localhost:8080/WMSService.svc?wsdl
+
+###
+
+### ── 2. Submit standard BMWC order (expect 202 Accepted) ──────────────────
+# @name submitOrder
+POST {{apimGatewayUrl}}/bmwc/orders
+Content-Type: application/json
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+X-Correlation-ID: {{correlationId}}
+
+{
+  "orderId": "ORD-2026-SGP-001",
+  "customerId": "CUST-BMWC-001",
+  "warehouseCode": "WH-SIN",
+  "orderDate": "2026-04-09T10:00:00Z",
+  "priority": "STANDARD",
+  "lines": [
+    {
+      "lineNo": 1,
+      "sku": "SKU-W-001",
+      "description": "Wheel Assembly Type A",
+      "quantity": 50,
+      "uom": "EA"
+    },
+    {
+      "lineNo": 2,
+      "sku": "SKU-T-022",
+      "description": "Tyre XR 235/55R18",
+      "quantity": 200,
+      "uom": "EA"
+    }
+  ],
+  "shipTo": {
+    "name": "BMWC Assembly Plant 1",
+    "address1": "Lot 5, Jalan Jubli Perak",
+    "city": "Shah Alam",
+    "country": "MY",
+    "postcode": "40150"
+  }
+}
+
+###
+
+### ── 3. Submit urgent order ────────────────────────────────────────────────
+POST {{apimGatewayUrl}}/bmwc/orders
+Content-Type: application/json
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+X-Correlation-ID: urgent-{{$timestamp}}
+
+{
+  "orderId": "ORD-2026-SGP-URGENT-001",
+  "customerId": "CUST-BMWC-002",
+  "warehouseCode": "WH-KUL",
+  "orderDate": "2026-04-09T10:15:00Z",
+  "priority": "URGENT",
+  "lines": [
+    {
+      "lineNo": 1,
+      "sku": "SKU-E-055",
+      "description": "Engine Gasket Set",
+      "quantity": 10,
+      "uom": "SET"
+    }
+  ]
+}
+
+###
+
+### ── 4. Get order status (Logic App query workflow) ──────────────────────
+GET {{apimGatewayUrl}}/bmwc/orders/ORD-2026-SGP-001/status
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+X-Correlation-ID: {{correlationId}}
+
+###
+
+### ── 5. Trigger 400 — missing required field (orderId absent) ─────────────
+POST {{apimGatewayUrl}}/bmwc/orders
+Content-Type: application/json
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+
+{
+  "customerId": "CUST-001",
+  "warehouseCode": "WH-SIN",
+  "lines": [{ "lineNo": 1, "sku": "SKU-001", "quantity": 5 }]
+}
+
+###
+
+### ── 6. Trigger 429 — rate limit (send multiple times quickly) ────────────
+POST {{apimGatewayUrl}}/bmwc/orders
+Content-Type: application/json
+Ocp-Apim-Subscription-Key: {{subscriptionKey}}
+
+{
+  "orderId": "ORD-RATELIMIT-TEST",
+  "customerId": "CUST-001",
+  "warehouseCode": "WH-SIN",
+  "lines": [{ "lineNo": 1, "sku": "SKU-001", "quantity": 1 }]
+}
+
+###
+
+### ── 7. Direct WMS SOAP call (bypassing Logic Apps — mock test only) ──────
+POST http://localhost:8080/WMSService.svc
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://wms.legacy.corp/v1/CreateOrder"
+
+<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:wms="http://wms.legacy.corp/v1">
+  <soapenv:Header>
+    <wms:AuthHeader>
+      <wms:Username>bmwc_api</wms:Username>
+      <wms:Password>test-password</wms:Password>
+      <wms:CorrelationId>direct-soap-test-001</wms:CorrelationId>
+    </wms:AuthHeader>
+  </soapenv:Header>
+  <soapenv:Body>
+    <wms:CreateOrder>
+      <wms:OrderRequest>
+        <wms:OrderId>ORD-DIRECT-SOAP-001</wms:OrderId>
+        <wms:CustomerId>CUST-001</wms:CustomerId>
+        <wms:WarehouseCode>WH-SIN</wms:WarehouseCode>
+        <wms:OrderDate>2026-04-09</wms:OrderDate>
+        <wms:Priority>STANDARD</wms:Priority>
+      </wms:OrderRequest>
+    </wms:CreateOrder>
+  </soapenv:Body>
+</soapenv:Envelope>
+
+###

@@ -1,0 +1,221 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+
+    "triggers": {
+      "Recurrence_DLQ_Check": {
+        "type": "Recurrence",
+        "description": "Runs every 15 minutes. Reads up to 10 dead-lettered messages from the DLQ in peek (non-destructive) mode. Does not consume or settle messages — ops team handles remediation.",
+        "recurrence": {
+          "frequency": "Minute",
+          "interval":  15
+        }
+      }
+    },
+
+    "actions": {
+
+      "Init_RunTimestamp": {
+        "type": "InitializeVariable",
+        "runAfter": {},
+        "inputs": {
+          "variables": [
+            {
+              "name":  "runTimestampUtc",
+              "type":  "string",
+              "value": "@{utcNow()}"
+            }
+          ]
+        }
+      },
+
+      "Init_DLQMessageCount": {
+        "type": "InitializeVariable",
+        "runAfter": {
+          "Init_RunTimestamp": ["Succeeded"]
+        },
+        "inputs": {
+          "variables": [
+            {
+              "name":  "dlqMessageCount",
+              "type":  "integer",
+              "value": 0
+            }
+          ]
+        }
+      },
+
+      "Init_AlertNeeded": {
+        "type": "InitializeVariable",
+        "runAfter": {
+          "Init_DLQMessageCount": ["Succeeded"]
+        },
+        "inputs": {
+          "variables": [
+            {
+              "name":  "alertNeeded",
+              "type":  "boolean",
+              "value": false
+            }
+          ]
+        }
+      },
+
+      "Peek_DLQ_Messages": {
+        "type": "ServiceProvider",
+        "runAfter": {
+          "Init_AlertNeeded": ["Succeeded"]
+        },
+        "description": "Peek up to 10 messages from the dead-letter sub-queue of wms-inbound. Peek does not acquire a lock or change message state — safe to call on schedule without affecting normal processing.",
+        "inputs": {
+          "parameters": {
+            "entityName":   "@{concat(parameters('ServiceBusQueueName'), '/$deadletterqueue')}",
+            "maxMessageCount": 10
+          },
+          "serviceProviderConfiguration": {
+            "connectionName":    "serviceBus",
+            "operationId":       "peekMessages",
+            "serviceProviderId": "/serviceProviders/serviceBus"
+          }
+        }
+      },
+
+      "Set_DLQ_Count": {
+        "type": "SetVariable",
+        "runAfter": {
+          "Peek_DLQ_Messages": ["Succeeded"]
+        },
+        "description": "Count how many messages the peek returned. If the DLQ is empty, peekMessages returns an empty array.",
+        "inputs": {
+          "name":  "dlqMessageCount",
+          "value": "@length(body('Peek_DLQ_Messages'))"
+        }
+      },
+
+      "Check_Alert_Threshold": {
+        "type": "Condition",
+        "runAfter": {
+          "Set_DLQ_Count": ["Succeeded"]
+        },
+        "description": "Alert threshold: any dead-lettered messages present (> 0). Tune to a higher number (e.g. > 5) in production if occasional DLQ messages are operationally acceptable.",
+        "expression": {
+          "and": [
+            {
+              "greater": ["@variables('dlqMessageCount')", 0]
+            }
+          ]
+        },
+        "actions": {
+
+          "Set_AlertNeeded_True": {
+            "type": "SetVariable",
+            "runAfter": {},
+            "inputs": {
+              "name":  "alertNeeded",
+              "value": true
+            }
+          },
+
+          "For_Each_DLQ_Message": {
+            "type": "Foreach",
+            "runAfter": {
+              "Set_AlertNeeded_True": ["Succeeded"]
+            },
+            "description": "Iterate each peeked DLQ message and emit a structured log entry per message. Log Analytics picks these up via the Diagnostics sink on the Logic App.",
+            "foreach": "@body('Peek_DLQ_Messages')",
+            "operationOptions": "Sequential",
+            "actions": {
+              "Compose_DLQ_Message_Log": {
+                "type": "Compose",
+                "runAfter": {},
+                "description": "Structured log line. All fields emitted as top-level properties so Log Analytics kusto queries can filter/project without dynamic() expansion.",
+                "inputs": {
+                  "event":                   "DLQ_MESSAGE_DETECTED",
+                  "monitorRunTimestampUtc":   "@{variables('runTimestampUtc')}",
+                  "sbMessageId":             "@{items('For_Each_DLQ_Message')?['messageId']}",
+                  "enqueuedTimeUtc":         "@{items('For_Each_DLQ_Message')?['enqueuedTimeUtc']}",
+                  "deliveryCount":           "@{items('For_Each_DLQ_Message')?['deliveryCount']}",
+                  "deadLetterReason":        "@{items('For_Each_DLQ_Message')?['deadLetterReason']}",
+                  "deadLetterErrorDescription": "@{items('For_Each_DLQ_Message')?['deadLetterErrorDescription']}",
+                  "correlationId":           "@{items('For_Each_DLQ_Message')?['userProperties']?['correlationId']}",
+                  "orderId":                 "@{items('For_Each_DLQ_Message')?['userProperties']?['orderId']}",
+                  "warehouseCode":           "@{items('For_Each_DLQ_Message')?['userProperties']?['warehouseCode']}",
+                  "priority":                "@{items('For_Each_DLQ_Message')?['userProperties']?['priority']}",
+                  "workflowRunId":           "@{workflow()['run']['name']}",
+                  "queueName":               "@{parameters('ServiceBusQueueName')}",
+                  "totalDlqMessagesInBatch": "@{variables('dlqMessageCount')}"
+                }
+              }
+            }
+          },
+
+          "Compose_DLQ_Alert_Summary": {
+            "type": "Compose",
+            "runAfter": {
+              "For_Each_DLQ_Message": ["Succeeded"]
+            },
+            "description": "Summary log entry — one record per monitor run. Used by the Azure Monitor Scheduled Query Rule alert (queries for DLQ_ALERT_SUMMARY events).",
+            "inputs": {
+              "event":                "DLQ_ALERT_SUMMARY",
+              "monitorRunTimestampUtc": "@{variables('runTimestampUtc')}",
+              "dlqMessageCount":      "@{variables('dlqMessageCount')}",
+              "queueName":            "@{parameters('ServiceBusQueueName')}",
+              "workflowRunId":        "@{workflow()['run']['name']}",
+              "severity":             "WARNING",
+              "recommendation":       "Review dead-lettered messages in wms-dead-letter-review queue. Check WMS SOAP endpoint availability and Logic App run history for detailed failure reasons."
+            }
+          },
+
+          "Placeholder_Send_Notification": {
+            "type": "Compose",
+            "runAfter": {
+              "Compose_DLQ_Alert_Summary": ["Succeeded"]
+            },
+            "description": "PLACEHOLDER — replace this Compose with your notification action. Options: (1) HTTP POST to a Teams webhook URL stored in parameters; (2) Send email via Office 365 connector; (3) POST to an Azure Function that fans out alerts. The body to forward is outputs('Compose_DLQ_Alert_Summary').",
+            "inputs": {
+              "notificationChannel":  "PLACEHOLDER",
+              "notificationPayload":  "@outputs('Compose_DLQ_Alert_Summary')",
+              "instruction":          "Replace this Compose action with an HTTP, Teams, or SendEmail action to deliver the alert payload above."
+            }
+          }
+
+        },
+        "else": {
+          "actions": {
+            "Compose_DLQ_Clear_Log": {
+              "type": "Compose",
+              "runAfter": {},
+              "description": "Heartbeat log when DLQ is healthy. Useful for confirming the monitor is running even when no alerts fire.",
+              "inputs": {
+                "event":                 "DLQ_QUEUE_CLEAR",
+                "monitorRunTimestampUtc": "@{variables('runTimestampUtc')}",
+                "dlqMessageCount":       0,
+                "queueName":             "@{parameters('ServiceBusQueueName')}",
+                "workflowRunId":         "@{workflow()['run']['name']}"
+              }
+            }
+          }
+        }
+      }
+
+    },
+
+    "outputs": {},
+
+    "parameters": {
+      "ServiceBusQueueName": {
+        "type": "string",
+        "defaultValue": "wms-inbound",
+        "description": "Base queue name — workflow appends /$deadletterqueue suffix for DLQ access"
+      },
+      "DlqAlertThreshold": {
+        "type": "integer",
+        "defaultValue": 1,
+        "description": "Minimum DLQ message count to trigger alert. Set to 0 for always-alert, higher for production noise tolerance."
+      }
+    }
+  },
+
+  "kind": "Stateful"
+}

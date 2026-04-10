@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+
+  "_comment": [
+    "PRODUCTION — Singapore (Southeast Asia, primary region)",
+    "Before deploying: supply wmsUsername and wmsPassword via a Key Vault-backed parameter store",
+    "or set them as azd env variables and reference ${AZURE_...} below.",
+    "Required manual steps after deploy: see README.md § Post-Deployment."
+  ],
+
+  "parameters": {
+    "environmentName":           { "value": "prod-sg" },
+    "location":                  { "value": "southeastasia" },
+
+    "apimPublisherEmail":        { "value": "integration-ops@bmwc.example.com" },
+    "apimPublisherName":         { "value": "BMWC Integration Platform" },
+
+    "wmsSoapEndpoint":           { "value": "https://wms.bmwc.internal/WMSService.svc" },
+
+    "allowedClientIps":          { "value": ["10.0.0.0/8"] },
+    "apimSamplingPercentage":    { "value": 10 },
+    "apimRateLimitCalls":        { "value": 500 },
+    "apimRateLimitPeriod":       { "value": 60 },
+    "apimQuotaCalls":            { "value": 5000000 },
+    "apimQuotaPeriod":           { "value": 2592000 },
+
+    "inboundQueueName":          { "value": "wms-inbound" },
+    "deadLetterQueueName":       { "value": "wms-dead-letter-review" },
+    "messageTtl":                { "value": "PT8H" },
+    "maxDeliveryCount":          { "value": 5 },
+    "sbLockDuration":            { "value": "PT10M" },
+
+    "logRetentionDays":          { "value": 90 },
+    "logDailyQuotaGb":           { "value": -1 },
+
+    "maxElasticWorkers":         { "value": 10 },
+
+    "kvSoftDeleteRetentionDays": { "value": 90 },
+    "kvEnablePurgeProtection":   { "value": true }
+  }
+}

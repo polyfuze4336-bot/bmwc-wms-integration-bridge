@@ -1,0 +1,393 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+
+    "triggers": {
+      "Service_Bus_Message_Received": {
+        "type": "ServiceProvider",
+        "description": "Peek-lock: Logic Apps holds a 5-minute lock on each message. The runtime completes (settles) the message only when the workflow run succeeds. If the run fails or times out, the lock expires, delivery count increments, and Service Bus retries up to maxDeliveryCount (5). After 5 failed deliveries the message is dead-lettered automatically.",
+        "inputs": {
+          "parameters": {
+            "entityName":         "@parameters('ServiceBusQueueName')",
+            "isSessionsEnabled":  false
+          },
+          "serviceProviderConfiguration": {
+            "connectionName":    "serviceBus",
+            "operationId":       "receiveQueueMessages",
+            "serviceProviderId": "/serviceProviders/serviceBus"
+          }
+        }
+      }
+    },
+
+    "actions": {
+
+      "Init_CorrelationId": {
+        "type": "InitializeVariable",
+        "runAfter": {},
+        "description": "Recover correlationId from Service Bus UserProperties first; fall back to messageId, then generate a new GUID. Ensures trace continuity from the original BMWC HTTP call.",
+        "inputs": {
+          "variables": [
+            {
+              "name": "correlationId",
+              "type": "string",
+              "value": "@{coalesce(triggerBody()?['userProperties']?['correlationId'], triggerBody()?['messageId'], guid())}"
+            }
+          ]
+        }
+      },
+
+      "Init_SbMessageId": {
+        "type": "InitializeVariable",
+        "runAfter": {
+          "Init_CorrelationId": ["Succeeded"]
+        },
+        "description": "Capture Service Bus messageId (= orderId) for telemetry. Kept separate so log entries always reference the SB message identity.",
+        "inputs": {
+          "variables": [
+            {
+              "name": "sbMessageId",
+              "type": "string",
+              "value": "@{triggerBody()?['messageId']}"
+            }
+          ]
+        }
+      },
+
+      "Init_DeliveryCount": {
+        "type": "InitializeVariable",
+        "runAfter": {
+          "Init_SbMessageId": ["Succeeded"]
+        },
+        "description": "Track how many times SB has delivered this message. Used in telemetry logs; not used for control flow (SB controls DLQ promotion).",
+        "inputs": {
+          "variables": [
+            {
+              "name": "deliveryCount",
+              "type": "integer",
+              "value": "@triggerBody()?['deliveryCount']"
+            }
+          ]
+        }
+      },
+
+      "Decode_Message_Body": {
+        "type": "Compose",
+        "runAfter": {
+          "Init_DeliveryCount": ["Succeeded"]
+        },
+        "description": "Service Bus built-in connector delivers contentData as base64. Decode to a UTF-8 string before parsing.",
+        "inputs": "@base64ToString(triggerBody()?['contentData'])"
+      },
+
+      "Parse_Order_Message": {
+        "type": "ParseJson",
+        "runAfter": {
+          "Decode_Message_Body": ["Succeeded"]
+        },
+        "description": "Deserialise the enriched canonical message produced by bmwc-rest-ingress. Includes _meta envelope.",
+        "inputs": {
+          "content": "@outputs('Decode_Message_Body')",
+          "schema": {
+            "type": "object",
+            "required": ["orderId", "customerId", "warehouseCode", "orderDate", "lines", "_meta"],
+            "properties": {
+              "orderId":       { "type": "string" },
+              "customerId":    { "type": "string" },
+              "warehouseCode": { "type": "string" },
+              "orderDate":     { "type": "string" },
+              "priority":      { "type": "string" },
+              "lines":         { "type": "array"  },
+              "shipTo":        { "type": "object" },
+              "_meta": {
+                "type": "object",
+                "properties": {
+                  "correlationId":  { "type": "string" },
+                  "enqueuedAtUtc":  { "type": "string" },
+                  "source":         { "type": "string" },
+                  "schemaVersion":  { "type": "string" },
+                  "workflowRunId":  { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      },
+
+      "Compose_SOAP_Input": {
+        "type": "Compose",
+        "runAfter": {
+          "Parse_Order_Message": ["Succeeded"]
+        },
+        "description": "Merge the canonical order message with WMS auth credentials into a single flat JSON object for the Liquid transform. Credentials come from securestring parameters (Key Vault references at runtime) and are NEVER written to logs or run history — they appear in the Liquid template only.",
+        "inputs": {
+          "orderId":               "@{body('Parse_Order_Message')?['orderId']}",
+          "customerId":            "@{body('Parse_Order_Message')?['customerId']}",
+          "warehouseCode":         "@{body('Parse_Order_Message')?['warehouseCode']}",
+          "orderDate":             "@{body('Parse_Order_Message')?['orderDate']}",
+          "priority":              "@{coalesce(body('Parse_Order_Message')?['priority'], 'STANDARD')}",
+          "requestedDeliveryDate": "@{body('Parse_Order_Message')?['requestedDeliveryDate']}",
+          "customerReference":     "@{body('Parse_Order_Message')?['customerReference']}",
+          "notes":                 "@{body('Parse_Order_Message')?['notes']}",
+          "lines":                 "@{body('Parse_Order_Message')?['lines']}",
+          "shipTo":                "@{body('Parse_Order_Message')?['shipTo']}",
+          "_meta":                 "@{body('Parse_Order_Message')?['_meta']}",
+          "_auth": {
+            "username": "@{parameters('WmsUsername')}",
+            "password": "@{parameters('WmsPassword')}"
+          }
+        }
+      },
+
+      "Build_SOAP_Envelope": {
+        "type": "Liquid",
+        "kind": "JsonToText",
+        "runAfter": {
+          "Compose_SOAP_Input": ["Succeeded"]
+        },
+        "description": "Transform the merged canonical JSON into a WMS SOAP 1.1 CreateOrderRequest envelope using the DotLiquid map. The map handles: array iteration over order lines, xml_escape on all string fields, xsi:nil for blank optional elements, conditional shipTo block, UTC timestamps passed through unmodified. Map file: logic-app/lib/maps/bmwc-order-to-wms-soap.liquid",
+        "inputs": {
+          "body": "@outputs('Compose_SOAP_Input')",
+          "map":  "bmwc-order-to-wms-soap"
+        }
+      },
+
+      "Scope_WMS_Call": {
+        "type": "Scope",
+        "runAfter": {
+          "Build_SOAP_Envelope": ["Succeeded"]
+        },
+        "description": "Scope isolates the WMS HTTP call and its response check. This allows a targeted catch block (Scope_Catch_WMS_Call_Error) without terminating the entire run immediately.",
+        "actions": {
+
+          "Call_WMS_SOAP_Endpoint": {
+            "type": "Http",
+            "runAfter": {},
+            "description": "POST SOAP envelope to the WMS private endpoint over VNet. Retry policy: exponential, 3 retries, starting at 15s, doubling up to 1h. Logic Apps Standard retries HTTP actions on 429, 500-599, and network errors.",
+            "inputs": {
+              "method":  "POST",
+              "uri":     "@parameters('WmsSoapEndpoint')",
+              "headers": {
+                "Content-Type":      "text/xml; charset=utf-8",
+                "SOAPAction":        "\"http://wms.legacy.corp/v1/CreateOrder\"",
+                "X-Correlation-ID":  "@{variables('correlationId')}",
+                "X-Source-System":   "BMWC-LA-Dispatcher"
+              },
+              "body": "@{body('Build_SOAP_Envelope')}",
+              "retryPolicy": {
+                "type":            "exponential",
+                "count":           3,
+                "interval":        "PT15S",
+                "maximumInterval": "PT1H",
+                "minimumInterval": "PT5S"
+              }
+            }
+          },
+
+          "Compose_Parse_WMS_Response": {
+            "type": "Compose",
+            "runAfter": {
+              "Call_WMS_SOAP_Endpoint": ["Succeeded"]
+            },
+            "description": "Convert the WMS SOAP XML response body to a JSON object using the xml() function. This enables: (1) SOAP fault detection via property existence check, (2) field extraction using bracket notation in subsequent actions, (3) feeding the wms-soap-response-to-json Liquid map. The xml() call preserves namespace prefixes as key prefixes (soapenv:Envelope, wms:CreateOrderResponse, etc.).",
+            "inputs": "@xml(body('Call_WMS_SOAP_Endpoint'))"
+          },
+
+          "Check_WMS_HTTP_Status": {
+            "type": "Condition",
+            "runAfter": {
+              "Compose_Parse_WMS_Response": ["Succeeded"]
+            },
+            "description": "Two-stage check: (1) HTTP status must be 200 — non-200 triggers terminate so SB delivery count increments. (2) Within the 200 branch, Check_SOAP_Fault detects WMS SOAP Faults returned inside an HTTP 200 body (a common legacy SOAP pattern).",
+            "expression": {
+              "and": [
+                {
+                  "equals": [
+                    "@outputs('Call_WMS_SOAP_Endpoint')?['statusCode']",
+                    200
+                  ]
+                }
+              ]
+            },
+            "actions": {
+              "Check_SOAP_Fault": {
+                "type": "Condition",
+                "runAfter": {},
+                "description": "Detect a SOAP Fault returned inside HTTP 200. Legacy WMS services commonly return HTTP 200 with a soapenv:Fault element in the body instead of an HTTP 4xx/5xx. Check for the fault element in the xml()-parsed response object.",
+                "expression": {
+                  "and": [
+                    {
+                      "equals": [
+                        "@{empty(outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['soapenv:Fault'])}",
+                        "True"
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "Compose_WMS_Success_Telemetry": {
+                    "type": "Compose",
+                    "runAfter": {},
+                    "description": "Structured log entry — all key identifiers captured so a single Log Analytics query can reconstruct the full order journey. wmsOrderId extracted from parsed SOAP response.",
+                    "inputs": {
+                      "event":            "WMS_DISPATCH_SUCCESS",
+                      "correlationId":    "@{variables('correlationId')}",
+                      "orderId":          "@{body('Parse_Order_Message')?['orderId']}",
+                      "sbMessageId":      "@{variables('sbMessageId')}",
+                      "deliveryCount":    "@{variables('deliveryCount')}",
+                      "warehouseCode":    "@{body('Parse_Order_Message')?['warehouseCode']}",
+                      "priority":         "@{body('Parse_Order_Message')?['priority']}",
+                      "wmsStatusCode":    "@{outputs('Call_WMS_SOAP_Endpoint')?['statusCode']}",
+                      "wmsOrderId":       "@{outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['wms:CreateOrderResponse']?['wms:WmsOrderId']}",
+                      "wmsStatus":        "@{outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['wms:CreateOrderResponse']?['wms:Status']}",
+                      "estimatedReady":   "@{outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['wms:CreateOrderResponse']?['wms:EstimatedReadyDate']}",
+                      "soapAction":       "CreateOrder",
+                      "workflowRunId":    "@{workflow()['run']['name']}",
+                      "ingestRunId":      "@{body('Parse_Order_Message')?['_meta']?['workflowRunId']}",
+                      "enqueuedAtUtc":    "@{body('Parse_Order_Message')?['_meta']?['enqueuedAtUtc']}",
+                      "completedAtUtc":   "@{utcNow()}"
+                    }
+                  }
+                },
+                "else": {
+                  "actions": {
+                    "Compose_SOAP_Fault_Telemetry": {
+                      "type": "Compose",
+                      "runAfter": {},
+                      "description": "Log the SOAP fault details for diagnostic querying in Log Analytics.",
+                      "inputs": {
+                        "event":          "WMS_SOAP_FAULT",
+                        "correlationId":  "@{variables('correlationId')}",
+                        "orderId":        "@{body('Parse_Order_Message')?['orderId']}",
+                        "sbMessageId":    "@{variables('sbMessageId')}",
+                        "deliveryCount":  "@{variables('deliveryCount')}",
+                        "faultcode":      "@{outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['soapenv:Fault']?['faultcode']}",
+                        "faultstring":    "@{outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['soapenv:Fault']?['faultstring']}",
+                        "wmsErrorCode":   "@{outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['soapenv:Fault']?['detail']?['wms:ErrorDetail']?['wms:ErrorCode']}",
+                        "soapAction":     "CreateOrder",
+                        "workflowRunId":  "@{workflow()['run']['name']}",
+                        "faultedAtUtc":   "@{utcNow()}"
+                      }
+                    },
+                    "Terminate_SOAP_Fault": {
+                      "type": "Terminate",
+                      "runAfter": {
+                        "Compose_SOAP_Fault_Telemetry": ["Succeeded"]
+                      },
+                      "description": "Terminate with Failed on SOAP Fault — releases SB peek-lock, increments delivery count. After 5 deliveries the message is dead-lettered for manual review. Note: some WMS SOAP faults are permanent (e.g. invalid SKU) — if the fault code indicates a permanent error, consider settling (completing) the message here instead to avoid unnecessary retries.",
+                      "inputs": {
+                        "runStatus": "Failed",
+                        "runError": {
+                          "code":    "WMS_SOAP_FAULT",
+                          "message": "@{concat('WMS returned SOAP Fault for order ', body('Parse_Order_Message')?['orderId'], ': ', outputs('Compose_Parse_WMS_Response')?['soapenv:Envelope']?['soapenv:Body']?['soapenv:Fault']?['faultstring'], ' (correlationId: ', variables('correlationId'), ')')}"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "else": {
+              "actions": {
+                "Compose_WMS_Non200_Telemetry": {
+                  "type": "Compose",
+                  "runAfter": {},
+                  "inputs": {
+                    "event":          "WMS_DISPATCH_NON200",
+                    "correlationId":  "@{variables('correlationId')}",
+                    "orderId":        "@{body('Parse_Order_Message')?['orderId']}",
+                    "sbMessageId":    "@{variables('sbMessageId')}",
+                    "deliveryCount":  "@{variables('deliveryCount')}",
+                    "wmsStatusCode":  "@{outputs('Call_WMS_SOAP_Endpoint')?['statusCode']}",
+                    "wmsBody":        "@{body('Call_WMS_SOAP_Endpoint')}",
+                    "soapAction":     "CreateOrder",
+                    "workflowRunId":  "@{workflow()['run']['name']}",
+                    "failedAtUtc":    "@{utcNow()}"
+                  }
+                },
+                "Terminate_Non200": {
+                  "type": "Terminate",
+                  "runAfter": {
+                    "Compose_WMS_Non200_Telemetry": ["Succeeded"]
+                  },
+                  "description": "Terminating with Failed releases the SB peek-lock. Service Bus increments delivery count. After maxDeliveryCount (5), message is dead-lettered.",
+                  "inputs": {
+                    "runStatus": "Failed",
+                    "runError": {
+                      "code":    "WMS_NON_200",
+                      "message": "@{concat('WMS returned HTTP ', outputs('Call_WMS_SOAP_Endpoint')?['statusCode'], ' for order ', body('Parse_Order_Message')?['orderId'], ' (correlationId: ', variables('correlationId'), ')')}"
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+        }
+      },
+
+      "Scope_Catch_WMS_Call_Error": {
+        "type": "Scope",
+        "runAfter": {
+          "Scope_WMS_Call": ["Failed", "TimedOut"]
+        },
+        "description": "Catches complete HTTP failures (network error, DNS failure, timeout after retries exhausted). Logs the error then terminates with Failed so SB delivery count increments.",
+        "actions": {
+          "Compose_WMS_CallError_Telemetry": {
+            "type": "Compose",
+            "runAfter": {},
+            "inputs": {
+              "event":          "WMS_CALL_FAILED",
+              "correlationId":  "@{variables('correlationId')}",
+              "orderId":        "@{body('Parse_Order_Message')?['orderId']}",
+              "sbMessageId":    "@{variables('sbMessageId')}",
+              "deliveryCount":  "@{variables('deliveryCount')}",
+              "soapAction":     "CreateOrder",
+              "workflowRunId":  "@{workflow()['run']['name']}",
+              "failedAtUtc":    "@{utcNow()}",
+              "failureReason":  "@{result('Scope_WMS_Call')?[0]?['error']?['message']}"
+            }
+          },
+          "Terminate_WMS_Call_Error": {
+            "type": "Terminate",
+            "runAfter": {
+              "Compose_WMS_CallError_Telemetry": ["Succeeded"]
+            },
+            "inputs": {
+              "runStatus": "Failed",
+              "runError": {
+                "code":    "WMS_CALL_ERROR",
+                "message": "@{concat('HTTP call to WMS failed for order ', body('Parse_Order_Message')?['orderId'], ' | deliveryCount: ', string(variables('deliveryCount')), ' | correlationId: ', variables('correlationId'))}"
+              }
+            }
+          }
+        }
+      }
+
+    },
+
+    "outputs": {},
+
+    "parameters": {
+      "ServiceBusQueueName": {
+        "type": "string",
+        "defaultValue": "wms-inbound"
+      },
+      "WmsSoapEndpoint": {
+        "type": "string",
+        "defaultValue": ""
+      },
+      "WmsUsername": {
+        "type": "string",
+        "defaultValue": "bmwc_api"
+      },
+      "WmsPassword": {
+        "type": "securestring",
+        "defaultValue": ""
+      }
+    }
+  },
+
+  "kind": "Stateful"
+}

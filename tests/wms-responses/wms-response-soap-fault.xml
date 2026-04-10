@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WMS SOAP Response — SOAP FAULT (business-rule rejection)
+  Scenario: WMS rejects the order because the SKU (SKU-X-999) is not registered
+  in the item master. This is a permanent failure — retrying will produce the
+  same result. The wms-soap-dispatcher catches this as a WMS_SOAP_FAULT event,
+  increments the dead-letter counter, and after maxDeliveryCount attempts
+  (default 5) the message moves to the dead-letter queue.
+
+  The faultcode "Client.Validation" signals that this is a caller-side error,
+  not a transient server fault. Operators must correct the SKU and manually
+  resubmit from the DLQ.
+
+  Log Analytics query to find this:
+    AppTraces
+    | where Properties.event == "WMS_SOAP_FAULT"
+    | where Properties.orderId == "ORD-2026-DLQ-001"
+    | project TimeGenerated, Properties.faultcode, Properties.faultstring
+-->
+<soap:Envelope
+    xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:wms="http://wms.legacy.corp/v1">
+
+  <soap:Header>
+    <wms:ResponseHeader>
+      <wms:CorrelationId>b2c3d4e5-f6a7-8901-bcde-f12345678901</wms:CorrelationId>
+      <wms:ResponseTimestamp>2026-04-10T04:00:00Z</wms:ResponseTimestamp>
+    </wms:ResponseHeader>
+  </soap:Header>
+
+  <soap:Body>
+    <soap:Fault>
+      <faultcode>soap:Client.Validation</faultcode>
+      <faultstring>Invalid item code SKU-X-999: item not found in warehouse WH-DLQ item master</faultstring>
+      <detail>
+        <wms:FaultDetail>
+          <wms:ErrorCode>WMS-VAL-001</wms:ErrorCode>
+          <wms:AffectedField>OrderLines[0].ItemCode</wms:AffectedField>
+          <wms:ExternalOrderId>ORD-2026-DLQ-001</wms:ExternalOrderId>
+          <wms:Guidance>Verify the SKU exists in the WMS item master and is active for warehouse WH-DLQ before resubmitting.</wms:Guidance>
+        </wms:FaultDetail>
+      </detail>
+    </soap:Fault>
+  </soap:Body>
+
+</soap:Envelope>

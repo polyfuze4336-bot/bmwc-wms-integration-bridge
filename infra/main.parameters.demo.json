@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName":           { "value": "demo" },
+    "location":                  { "value": "southeastasia" },
+
+    "apimPublisherEmail":        { "value": "platform@contoso.com" },
+    "apimPublisherName":         { "value": "BMWC Integration Platform" },
+
+    "wmsSoapEndpoint":           { "value": "http://wms-mock.internal:8080/WMSService.svc" },
+
+    "allowedClientIps":          { "value": [] },
+    "apimSamplingPercentage":    { "value": 100 },
+    "apimRateLimitCalls":        { "value": 100 },
+    "apimRateLimitPeriod":       { "value": 60 },
+    "apimQuotaCalls":            { "value": 10000 },
+    "apimQuotaPeriod":           { "value": 604800 },
+
+    "inboundQueueName":          { "value": "wms-inbound" },
+    "deadLetterQueueName":       { "value": "wms-dead-letter-review" },
+    "messageTtl":                { "value": "PT4H" },
+    "maxDeliveryCount":          { "value": 5 },
+    "sbLockDuration":            { "value": "PT10M" },
+
+    "logRetentionDays":          { "value": 30 },
+    "logDailyQuotaGb":           { "value": 1 },
+
+    "maxElasticWorkers":         { "value": 3 },
+
+    "kvSoftDeleteRetentionDays": { "value": 7 },
+    "kvEnablePurgeProtection":   { "value": false }
+  }
+}

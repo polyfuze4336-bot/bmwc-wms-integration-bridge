@@ -1,0 +1,143 @@
+<!--
+  apim-policies/bmwc-api-policy.xml
+  ──────────────────────────────────────────────────────────────────────────────
+  Scope:    BMWC → WMS Bridge API  (path: /bmwc)
+  Applied:  ALL operations under this API — POST /orders and GET /orders/{id}/status
+
+  Policy chain (inbound):
+    1. IP allowlist    — restrict to BMWC source CIDRs (demo: 0.0.0.0/0 bypass with comment)
+    2. Subscription    — enforced at API level (subscriptionRequired: true)
+    3. Rate limit      — 100 calls/min per subscription key
+    4. Quota           — 10,000 calls/week per subscription key
+    5. Content-Type    — reject non-JSON before parsing body
+    6. Payload size    — reject > 256 KB before Logic Apps is invoked
+    7. Correlation ID  — forward to Logic Apps (global policy injects if absent)
+    8. Backend routing — named value {{la-bmwc-ingest-url}} set by post-provision.ps1
+
+  Outbound:
+    - Strip Logic Apps internal redirect/SAS headers
+    - Preserve correlation and workflow run ID headers
+
+  On-error:
+    - Return structured JSON envelope — never expose raw APIM or Logic Apps faults
+  ──────────────────────────────────────────────────────────────────────────────
+-->
+<policies>
+    <inbound>
+        <base />
+
+        <!-- ── 1. IP Allowlist ───────────────────────────────────────────────
+             Add specific CIDRs for BMWC source systems for production.
+             Demo mode: comment out the ip-filter block below to allow all IPs,
+             or use the <allow-all /> element for open demo access.
+
+             Production example (replace with real BMWC egress IPs):
+               <ip-filter action="allow">
+                 <address-range from="203.0.113.10" to="203.0.113.10" />
+                 <address-range from="198.51.100.0" to="198.51.100.255" />
+               </ip-filter>
+        -->
+        <!-- DEMO: IP filter disabled — enable and configure CIDRs for production -->
+        <!--
+        <ip-filter action="allow">
+            <address-range from="0.0.0.0" to="0.0.0.0" />
+        </ip-filter>
+        -->
+
+        <!-- ── 2. Throttle — protect Logic Apps and Service Bus from burst ── -->
+        <rate-limit calls="100" renewal-period="60" />
+        <quota calls="10000" renewal-period="604800" />
+
+        <!-- ── 3. Content-Type enforcement ──────────────────────────────────
+             Reject non-JSON content types before we attempt to read the body.
+             This prevents XML, form-data, or plain-text requests reaching LA. -->
+        <choose>
+            <when condition="@(context.Request.Method == &quot;POST&quot; &amp;&amp; !context.Request.Headers.GetValueOrDefault(&quot;Content-Type&quot;,&quot;&quot;).Contains(&quot;application/json&quot;))">
+                <return-response>
+                    <set-status code="415" reason="Unsupported Media Type" />
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-body>@{
+                        return new JObject(
+                            new JProperty("status", "UNSUPPORTED_MEDIA_TYPE"),
+                            new JProperty("code", "CONTENT_TYPE_REQUIRED"),
+                            new JProperty("message", "Content-Type must be application/json"),
+                            new JProperty("correlationId", context.Request.Headers.GetValueOrDefault("X-Correlation-ID", context.RequestId.ToString())),
+                            new JProperty("timestamp", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))
+                        ).ToString();
+                    }</set-body>
+                </return-response>
+            </when>
+        </choose>
+
+        <!-- ── 4. Payload size — 256 KB hard limit ──────────────────────────
+             APIM checks the Content-Length header and/or reads the body to
+             enforce size. Returns 413 before Logic Apps is invoked.
+             262144 bytes = 256 × 1024 bytes -->
+        <validate-content unspecified-content-type-action="prevent"
+                          max-size="262144"
+                          size-exceeded-action="prevent"
+                          errors-variable-name="requestBodyErrors">
+            <content type="application/json" validate-as="json" action="prevent" />
+        </validate-content>
+
+        <!-- ── 5. Forward correlation ID to Logic Apps ───────────────────────
+             Global policy already ensured X-Correlation-ID is set.
+             Set it explicitly so it survives any header normalisation. -->
+        <set-header name="X-Correlation-ID" exists-action="override">
+            <value>@(context.Request.Headers.GetValueOrDefault("X-Correlation-ID", context.RequestId.ToString()))</value>
+        </set-header>
+
+        <!-- ── 6. Backend routing to Logic Apps Standard trigger ────────────
+             Named Value {{la-bmwc-ingest-url}} holds the base URL.
+             Set by scripts/post-provision.ps1 after azd provision.
+             Operation-level policies override the URL path for each operation. -->
+        <set-backend-service base-url="{{la-bmwc-ingest-url}}" />
+    </inbound>
+
+    <backend>
+        <!-- Async ingress: Logic App validates and enqueues, returns 202 quickly.
+             30 s timeout covers schema validation + Service Bus enqueue + retry.
+             If Logic Apps does not respond within 30 s, APIM returns 504. -->
+        <forward-request timeout="30" fail-on-error-status-code="false" />
+    </backend>
+
+    <outbound>
+        <base />
+
+        <!-- Strip Logic Apps internal routing and SAS token headers -->
+        <set-header name="Location" exists-action="delete" />
+        <set-header name="x-ms-workflow-run-id" exists-action="delete" />
+        <set-header name="x-ms-tracking-id" exists-action="delete" />
+
+        <!-- Promote Logic Apps workflow run ID to public header for client tracing -->
+        <set-header name="X-Workflow-Run-ID" exists-action="skip">
+            <value>@(context.Response.Headers.GetValueOrDefault("x-ms-workflow-run-id", ""))</value>
+        </set-header>
+    </outbound>
+
+    <on-error>
+        <base />
+        <!-- Return structured JSON error — never expose raw APIM fault XML or
+             Logic Apps error details that reveal internal implementation.
+             context.LastError.Source: Gateway | Backend | OutboundPipeline -->
+        <set-status code="@(context.Response != null ? context.Response.StatusCode : 500)"
+                    reason="@(context.Response != null ? context.Response.StatusReason : "Internal Gateway Error")" />
+        <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+        </set-header>
+        <set-body>@{
+            var statusCode = context.Response != null ? context.Response.StatusCode : 500;
+            var errorCode = context.LastError != null ? context.LastError.Reason : "GATEWAY_ERROR";
+            var errorMsg  = context.LastError != null ? context.LastError.Message : "An unexpected gateway error occurred";
+            return new JObject(
+                new JProperty("status", "ERROR"),
+                new JProperty("code",   errorCode),
+                new JProperty("message", errorMsg),
+                new JProperty("correlationId", context.Request.Headers.GetValueOrDefault("X-Correlation-ID", context.RequestId.ToString())),
+                new JProperty("timestamp", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))
+            ).ToString();
+        }</set-body>
+    </on-error>
+</policies>

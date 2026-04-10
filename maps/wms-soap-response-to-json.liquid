@@ -1,0 +1,87 @@
+{%- comment -%}
+  maps/wms-soap-response-to-json.liquid
+  ─────────────────────────────────────────────────────────────────────────────
+  Transform:   WMS SOAP 1.1 CreateOrderResponse  →  BMWC canonical JSON status
+  Engine:      DotLiquid  (Logic Apps Standard built-in Liquid action)
+  Map kind:    JsonToJson   (input is the JSON object produced by xml() function)
+  Map path:    logic-app/lib/maps/wms-soap-response-to-json.liquid
+  Map name:    wms-soap-response-to-json
+  ─────────────────────────────────────────────────────────────────────────────
+  PRE-PROCESSING REQUIRED in the workflow (Compose_Parse_WMS_Response action):
+    This map receives the WMS response AFTER the HTTP XML body has been
+    converted to a JSON object using the Logic Apps xml() function.
+
+    Action: Compose_Parse_WMS_Response
+      inputs: "@xml(body('Call_WMS_SOAP_Endpoint'))"
+
+    The xml() function converts XML namespace-prefixed element names into JSON
+    keys using the prefix:localname format. Colons in key names require bracket
+    notation in DotLiquid:
+      content['soapenv:Envelope']['soapenv:Body']
+
+  ─────────────────────────────────────────────────────────────────────────────
+  RESPONSE SHAPES handled by this map:
+
+  Shape A — Success response (HTTP 200, no fault):
+    <soapenv:Envelope>
+      <soapenv:Body>
+        <wms:CreateOrderResponse>
+          <wms:Status>ACCEPTED</wms:Status>
+          <wms:WmsOrderId>WMS-xxx</wms:WmsOrderId>
+          <wms:Message>Order received and queued for processing</wms:Message>
+          <wms:EstimatedReadyDate>2026-04-10T00:00:00Z</wms:EstimatedReadyDate>
+          <wms:WarehouseRef>WH-SIN-ORD-2026-SGP-001</wms:WarehouseRef>
+        </wms:CreateOrderResponse>
+      </soapenv:Body>
+    </soapenv:Envelope>
+
+  Shape B — SOAP Fault (HTTP 200 with fault in body, or HTTP 500):
+    <soapenv:Envelope>
+      <soapenv:Body>
+        <soapenv:Fault>
+          <faultcode>wms:InvalidWarehouse</faultcode>
+          <faultstring>Warehouse code WH-XXX not found in WMS master data</faultstring>
+          <detail>
+            <wms:ErrorDetail>
+              <wms:ErrorCode>WMS-4001</wms:ErrorCode>
+              <wms:ErrorMessage>Warehouse code WH-XXX not found</wms:ErrorMessage>
+            </wms:ErrorDetail>
+          </detail>
+        </soapenv:Fault>
+      </soapenv:Body>
+    </soapenv:Envelope>
+
+  ─────────────────────────────────────────────────────────────────────────────
+  NOTE: Do not add timezone conversion here.
+    - All timestamps from WMS are expected in UTC.
+    - The Logic App's utcNow() is added to the telemetry log in the workflow,
+      not in this map.
+    - GMT+8 localisation is strictly a reporting-layer concern (KQL dashboards).
+  ─────────────────────────────────────────────────────────────────────────────
+  ALTERNATIVE — xpath() expressions (recommended for targeted extraction):
+    If the WMS WSDL is known, prefer xpath() expressions in Compose actions
+    over this Liquid map for individual field extraction. Example:
+      xpath(xml(body('Call_WMS_SOAP_Endpoint')),
+            'string(/*[local-name()="Envelope"]/*[local-name()="Body"]
+                      /*[local-name()="CreateOrderResponse"]
+                      /*[local-name()="WmsOrderId"])')
+    local-name() avoids namespace prefix binding issues entirely.
+{%- endcomment -%}
+{
+  "isFault": {%- if content['soapenv:Envelope']['soapenv:Body']['soapenv:Fault'] -%}true{%- else -%}false{%- endif -%},
+
+  "success": {
+    "status":               "{{- content['soapenv:Envelope']['soapenv:Body']['wms:CreateOrderResponse']['wms:Status'] | default: '' -}}",
+    "wmsOrderId":           "{{- content['soapenv:Envelope']['soapenv:Body']['wms:CreateOrderResponse']['wms:WmsOrderId'] | default: '' -}}",
+    "message":              "{{- content['soapenv:Envelope']['soapenv:Body']['wms:CreateOrderResponse']['wms:Message'] | default: '' -}}",
+    "estimatedReadyDate":   "{{- content['soapenv:Envelope']['soapenv:Body']['wms:CreateOrderResponse']['wms:EstimatedReadyDate'] | default: '' -}}",
+    "warehouseRef":         "{{- content['soapenv:Envelope']['soapenv:Body']['wms:CreateOrderResponse']['wms:WarehouseRef'] | default: '' -}}"
+  },
+
+  "fault": {
+    "faultcode":    "{{- content['soapenv:Envelope']['soapenv:Body']['soapenv:Fault']['faultcode'] | default: '' -}}",
+    "faultstring":  "{{- content['soapenv:Envelope']['soapenv:Body']['soapenv:Fault']['faultstring'] | default: '' -}}",
+    "errorCode":    "{{- content['soapenv:Envelope']['soapenv:Body']['soapenv:Fault']['detail']['wms:ErrorDetail']['wms:ErrorCode'] | default: '' -}}",
+    "errorMessage": "{{- content['soapenv:Envelope']['soapenv:Body']['soapenv:Fault']['detail']['wms:ErrorDetail']['wms:ErrorMessage'] | default: '' -}}"
+  }
+}

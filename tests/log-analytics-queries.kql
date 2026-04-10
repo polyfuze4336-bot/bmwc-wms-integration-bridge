@@ -1,0 +1,150 @@
+// =============================================================================
+// BMWC → WMS Bridge — Log Analytics KQL Query Pack
+// Save as Saved Queries in your Log Analytics workspace:
+//   Portal → Log Analytics → Saved Queries → New → paste each block
+// =============================================================================
+
+
+// ── 1. All events for a specific order ───────────────────────────────────────
+// Change the orderId value to trace any individual order end-to-end.
+AppTraces
+| where Properties.orderId == "ORD-2026-SGP-001"
+| project TimeGenerated,
+          event          = tostring(Properties.event),
+          correlationId  = tostring(Properties.correlationId),
+          wmsOrderId     = tostring(Properties.wmsOrderId),
+          enqueuedAtUtc  = tostring(Properties.enqueuedAtUtc),
+          completedAtUtc = tostring(Properties.completedAtUtc)
+| order by TimeGenerated asc
+
+
+// ── 2. End-to-end success rate (last 24h) ────────────────────────────────────
+AppTraces
+| where TimeGenerated > ago(24h)
+| where Properties.event in (
+    "ENQUEUE_SUCCESS",
+    "WMS_DISPATCH_SUCCESS",
+    "WMS_SOAP_FAULT",
+    "ENQUEUE_FAILED",
+    "DLQ_ALERT_SUMMARY"
+  )
+| summarize Count = count() by event = tostring(Properties.event)
+| order by Count desc
+
+
+// ── 3. p50 / p95 / p99 end-to-end dispatch latency (last 1h) ────────────────
+// Measures time from Service Bus enqueue to WMS acknowledgement.
+// p95 > 180s triggers the latency alert rule.
+AppTraces
+| where TimeGenerated > ago(1h)
+| where Properties.event == "WMS_DISPATCH_SUCCESS"
+| extend enqueuedAt  = todatetime(Properties.enqueuedAtUtc)
+| extend completedAt = todatetime(Properties.completedAtUtc)
+| extend latencySec  = datetime_diff("second", completedAt, enqueuedAt)
+| summarize
+    p50 = percentile(latencySec, 50),
+    p95 = percentile(latencySec, 95),
+    p99 = percentile(latencySec, 99),
+    MaxSec = max(latencySec),
+    OrderCount = count()
+
+
+// ── 4. WMS SOAP faults with full detail (last 1h) ────────────────────────────
+AppTraces
+| where TimeGenerated > ago(1h)
+| where Properties.event == "WMS_SOAP_FAULT"
+| project TimeGenerated,
+          orderId       = tostring(Properties.orderId),
+          faultcode     = tostring(Properties.faultcode),
+          faultstring   = tostring(Properties.faultstring),
+          correlationId = tostring(Properties.correlationId),
+          warehouseCode = tostring(Properties.warehouseCode)
+| order by TimeGenerated desc
+
+
+// ── 5. WMS fault spike detection (rolling 10-min buckets) ────────────────────
+// Used by alert rule: alert-wms-soapfault-{env}
+// Fires when FaultCount >= 3 in a 10-minute window.
+AppTraces
+| where TimeGenerated > ago(1h)
+| where Properties.event == "WMS_SOAP_FAULT"
+| summarize FaultCount = count() by bin(TimeGenerated, 5m)
+| order by TimeGenerated desc
+
+
+// ── 6. DLQ alert summaries from dlq-monitor ──────────────────────────────────
+AppTraces
+| where Properties.event == "DLQ_ALERT_SUMMARY"
+| project TimeGenerated,
+          dlqMessageCount = toint(Properties.dlqMessageCount),
+          queueName       = tostring(Properties.queueName)
+| order by TimeGenerated desc
+
+
+// ── 7. Enqueue failures — orders that never reached Service Bus ───────────────
+AppTraces
+| where TimeGenerated > ago(24h)
+| where Properties.event == "ENQUEUE_FAILED"
+| project TimeGenerated,
+          orderId       = tostring(Properties.orderId),
+          errorMessage  = tostring(Properties.errorMessage),
+          correlationId = tostring(Properties.correlationId)
+| order by TimeGenerated desc
+
+
+// ── 8. APIM 5xx error rate (5-min rolling window) ────────────────────────────
+// Alert fires when ErrorRate > 10% with at least 5 total requests.
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(1h)
+| summarize
+    ErrorCount = countif(ResponseCode >= 500),
+    TotalCount = count()
+    by bin(TimeGenerated, 5m)
+| extend ErrorRate = round(toreal(ErrorCount) / toreal(TotalCount) * 100, 2)
+| project TimeGenerated, TotalCount, ErrorCount, ErrorRate
+| order by TimeGenerated desc
+
+
+// ── 9. Order throughput by warehouse (last 24h) ───────────────────────────────
+AppTraces
+| where TimeGenerated > ago(24h)
+| where Properties.event == "ENQUEUE_SUCCESS"
+| summarize Orders = count() by
+    warehouseCode = tostring(Properties.warehouseCode),
+    bin(TimeGenerated, 1h)
+| order by TimeGenerated desc, Orders desc
+
+
+// ── 10. Idempotency verification — confirm no duplicate WMS calls ─────────────
+// For a given orderId, should show exactly 1 WMS_DISPATCH_SUCCESS row.
+AppTraces
+| where Properties.event in ("ENQUEUE_SUCCESS", "WMS_DISPATCH_SUCCESS")
+| summarize CallCount = count() by
+    orderId = tostring(Properties.orderId),
+    event   = tostring(Properties.event)
+| where CallCount > 1
+// If this returns any rows, an order was dispatched to WMS more than once — investigate.
+
+
+// ── 11. Correlated trace — single order full journey ─────────────────────────
+// Replace the correlationId value with the one from the caller's X-Correlation-ID header.
+AppTraces
+| where Properties.correlationId == "demo-corr-1744250401000"
+| union (
+    ApiManagementGatewayLogs
+    | where CorrelationId == "demo-corr-1744250401000"
+    | project TimeGenerated, event = "APIM_GATEWAY", ResponseCode
+  )
+| project TimeGenerated, event = coalesce(tostring(Properties.event), "APIM_GATEWAY"), Properties
+| order by TimeGenerated asc
+
+
+// ── 12. Timezone demo verification ───────────────────────────────────────────
+// Confirms that all stored timestamps are UTC regardless of what the caller sent.
+AppTraces
+| where Properties.orderId == "ORD-2026-KLU-007"
+| project TimeGenerated,
+          enqueuedAtUtc       = tostring(Properties.enqueuedAtUtc),
+          orderDateStored     = tostring(Properties.orderDate),
+          // Render as GMT+8 for display only:
+          enqueuedMYT         = datetime_add('hour', 8, todatetime(Properties.enqueuedAtUtc))

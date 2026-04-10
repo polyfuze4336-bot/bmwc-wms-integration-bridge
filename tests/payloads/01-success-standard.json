@@ -1,0 +1,50 @@
+{
+  "_scenario": "SUCCESS PATH — Standard 3-line order with lot-tracked item",
+  "_notes": "Covers the primary happy path: BMWC submits a multi-line order with a lotNumber on line 3. The timestamp is already UTC. Expected outcome: 202 Accepted at APIM, message visible in Service Bus, WMS returns SUCCESS, Log Analytics records WMS_DISPATCH_SUCCESS.",
+
+  "orderId": "ORD-2026-SGP-001",
+  "customerId": "CUST-BMWC-001",
+  "warehouseCode": "WH-SIN",
+  "orderDate": "2026-04-10T02:00:00Z",
+  "priority": "STANDARD",
+  "requestedDeliveryDate": "2026-04-11T00:00:00Z",
+  "customerReference": "PO-BMWC-2026-045",
+  "notes": "Handle with care — fragile components",
+
+  "lines": [
+    {
+      "lineNo": 1,
+      "sku": "SKU-W-001",
+      "description": "Wheel Assembly Type A",
+      "quantity": 50,
+      "uom": "EA"
+    },
+    {
+      "lineNo": 2,
+      "sku": "SKU-T-022",
+      "description": "Tyre XR 235/55R18",
+      "quantity": 200,
+      "uom": "EA"
+    },
+    {
+      "lineNo": 3,
+      "sku": "SKU-E-055",
+      "description": "Engine Gasket Set",
+      "quantity": 10,
+      "uom": "SET",
+      "lotNumber": "LOT-2026-003"
+    }
+  ],
+
+  "shipTo": {
+    "name": "BMWC Assembly Plant 1",
+    "address1": "Lot 5, Jalan Jubli Perak",
+    "address2": "Kawasan Perindustrian",
+    "city": "Shah Alam",
+    "state": "Selangor",
+    "country": "MY",
+    "postcode": "40150",
+    "contactName": "Ahmad Fauzi",
+    "contactPhone": "+601112345678"
+  }
+}

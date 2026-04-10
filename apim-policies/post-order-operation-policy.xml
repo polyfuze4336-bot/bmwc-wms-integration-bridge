@@ -1,0 +1,99 @@
+<!--
+  apim-policies/post-order-operation-policy.xml
+  ──────────────────────────────────────────────────────────────────────────────
+  Scope:    POST /bmwc/orders  (operation level — most specific scope)
+  Purpose:  Async fire-and-forget ingress from BMWC → Logic Apps → Service Bus
+
+  Execution order (most specific wins for the same section):
+    Operation policy inbound  runs AFTER  API policy inbound
+    Operation policy outbound runs BEFORE API policy outbound
+    → <base /> calls the parent (API) policy at that point in the chain
+
+  This policy adds:
+    - Prevent GET/DELETE/PATCH — belt-and-suspenders on top of API definition
+    - Set Content-Type on the forwarded request body (LA trigger requirement)
+    - Inject source metadata header for Logic Apps tracing
+    - Map 200 OK from Logic App trigger to 202 Accepted (trigger URL returns 200
+      on success; the operation contract promises 202)
+    - Suppress Logic Apps body on error so error JSON comes from API-level on-error
+  ──────────────────────────────────────────────────────────────────────────────
+-->
+<policies>
+    <inbound>
+        <base />
+
+        <!-- Explicit method guard — belt-and-suspenders beyond API definition -->
+        <choose>
+            <when condition="@(context.Request.Method != &quot;POST&quot;)">
+                <return-response>
+                    <set-status code="405" reason="Method Not Allowed" />
+                    <set-header name="Allow" exists-action="override">
+                        <value>POST</value>
+                    </set-header>
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-body>@{
+                        return new JObject(
+                            new JProperty("status", "METHOD_NOT_ALLOWED"),
+                            new JProperty("code", "METHOD_NOT_ALLOWED"),
+                            new JProperty("message", "Only POST is accepted on this endpoint"),
+                            new JProperty("correlationId", context.Request.Headers.GetValueOrDefault("X-Correlation-ID", context.RequestId.ToString())),
+                            new JProperty("timestamp", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))
+                        ).ToString();
+                    }</set-body>
+                </return-response>
+            </when>
+        </choose>
+
+        <!-- Ensure Content-Type is set correctly on the forwarded body.
+             Logic Apps Standard HTTP trigger requires application/json. -->
+        <set-header name="Content-Type" exists-action="override">
+            <value>application/json; charset=utf-8</value>
+        </set-header>
+
+        <!-- Source system header — Logic Apps can log this for downstream enrichment -->
+        <set-header name="X-Source-System" exists-action="override">
+            <value>BMWC-APIM</value>
+        </set-header>
+
+        <!-- Request timestamp injected at APIM — useful when Logic Apps utcNow()
+             is slightly later than the inbound call time -->
+        <set-header name="X-Request-Timestamp" exists-action="skip">
+            <value>@(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))</value>
+        </set-header>
+    </inbound>
+
+    <backend>
+        <base />
+    </backend>
+
+    <outbound>
+        <base />
+
+        <!-- Map Logic Apps trigger HTTP 200 → 202 Accepted.
+             The bmwc-rest-ingress workflow already returns 202 directly.
+             This rewrite is a safety net in case the trigger URL itself returns 200. -->
+        <choose>
+            <when condition="@(context.Response.StatusCode == 200)">
+                <set-status code="202" reason="Accepted" />
+            </when>
+        </choose>
+
+        <!-- Remove Logic Apps trigger path from Location header if present.
+             A 202 response should not expose the internal trigger callback URL. -->
+        <set-header name="Location" exists-action="delete" />
+
+        <!-- Cache-control: async submissions must not be cached -->
+        <set-header name="Cache-Control" exists-action="override">
+            <value>no-store</value>
+        </set-header>
+        <set-header name="Pragma" exists-action="override">
+            <value>no-cache</value>
+        </set-header>
+    </outbound>
+
+    <on-error>
+        <base />
+    </on-error>
+</policies>

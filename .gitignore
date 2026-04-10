@@ -1,0 +1,27 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment secrets — NEVER commit
+.env
+*.env.local
+
+# Azure Developer CLI environment state
+.azure/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Logic Apps local runtime
+logic-app/*/local.settings.json
+logic-app/*/.funcignore
+
+# VS Code
+.vscode/settings.json
+.vscode/launch.json
+
+# Build outputs
+dist/
+build/
+*.zip

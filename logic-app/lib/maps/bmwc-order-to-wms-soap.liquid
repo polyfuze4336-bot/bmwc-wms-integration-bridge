@@ -1,0 +1,160 @@
+{%- comment -%}
+  logic-app/lib/maps/bmwc-order-to-wms-soap.liquid
+  ─────────────────────────────────────────────────────────────────────────────
+  DEPLOYABLE COPY — this is the file Logic Apps Standard reads at runtime.
+  Source of record: maps/bmwc-order-to-wms-soap.liquid (identical content)
+  ─────────────────────────────────────────────────────────────────────────────
+  Transform:   BMWC canonical JSON  →  WMS SOAP 1.1 CreateOrderRequest envelope
+  Engine:      DotLiquid  (Logic Apps Standard built-in Liquid action)
+  SOAP ver:    1.1   (http://schemas.xmlsoap.org/soap/envelope/)
+  WMS ns:      http://wms.legacy.corp/v1  ← replace with actual WSDL targetNamespace
+  WMS op:      CreateOrder
+  SOAPAction:  "http://wms.legacy.corp/v1/CreateOrder"    (set on HTTP action header)
+  Map name:    bmwc-order-to-wms-soap   (referenced by name without extension)
+  ─────────────────────────────────────────────────────────────────────────────
+  INPUT CONTRACT  (content object — built by Compose_SOAP_Input action):
+  {
+    orderId               : string  REQUIRED
+    customerId            : string  REQUIRED
+    warehouseCode         : string  REQUIRED
+    orderDate             : string  REQUIRED  UTC ISO 8601 e.g. 2026-04-09T02:00:00Z
+    priority              : string  OPTIONAL  default STANDARD
+    requestedDeliveryDate : string  OPTIONAL  UTC ISO 8601
+    customerReference     : string  OPTIONAL
+    notes                 : string  OPTIONAL  max 500 chars
+    lines : [             REQUIRED  1..500 items
+      {
+        lineNo      : integer  REQUIRED
+        sku         : string   REQUIRED
+        description : string   OPTIONAL
+        quantity    : number   REQUIRED  > 0
+        uom         : string   OPTIONAL  default EA
+        lotNumber   : string   OPTIONAL
+        serialNumber: string   OPTIONAL
+      }
+    ]
+    shipTo : {            OPTIONAL
+      name, address1, address2?, city, state?, country, postcode?,
+      contactName?, contactPhone?
+    }
+    _meta : {             REQUIRED  injected by bmwc-rest-ingress
+      correlationId, enqueuedAtUtc, source, schemaVersion, workflowRunId
+    }
+    _auth : {             REQUIRED  injected by Compose_SOAP_Input — never logged
+      username, password
+    }
+  }
+  ─────────────────────────────────────────────────────────────────────────────
+  ESCAPING RULES:
+  - ALL string values mapped to XML text nodes use | xml_escape
+  - Timestamps (orderDate, enqueuedAtUtc) are already UTC ISO 8601 — no
+    conversion needed. Do NOT add | xml_escape to timestamp fields (they
+    contain only [0-9T:Z\-] and need no escaping).
+  - country codes are ISO 3166-1 alpha-2 — no escaping needed.
+  - numeric fields (lineNo, quantity) are not escaped.
+  - Empty optional string elements: use xsi:nil="true" self-closing form
+    only for elements required by the WSDL. Omit element entirely for
+    elements that are truly optional per WSDL.
+  ─────────────────────────────────────────────────────────────────────────────
+  WHITESPACE CONTROL:
+  - {%- ... -%}  strips newlines/spaces before AND after a block tag
+  - {{- ... -}}  strips whitespace around an output expression
+  - Use on all block tags inside element content to avoid spurious whitespace
+    nodes that some strict XML parsers reject.
+{%- endcomment -%}
+<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope
+    xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:wms="http://wms.legacy.corp/v1"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+  <soapenv:Header>
+    <wms:RequestHeader>
+      <wms:Username>{{- content._auth.username | xml_escape -}}</wms:Username>
+      <wms:Password>{{- content._auth.password | xml_escape -}}</wms:Password>
+      <wms:CorrelationId>{{- content._meta.correlationId -}}</wms:CorrelationId>
+      <wms:RequestTimestamp>{{- content._meta.enqueuedAtUtc -}}</wms:RequestTimestamp>
+      <wms:SourceSystem>{{- content._meta.source | default: 'BMWC' -}}</wms:SourceSystem>
+      <wms:SchemaVersion>{{- content._meta.schemaVersion | default: '1.0' -}}</wms:SchemaVersion>
+    </wms:RequestHeader>
+  </soapenv:Header>
+
+  <soapenv:Body>
+    <wms:CreateOrderRequest>
+
+      <!-- ── Order Identification ── -->
+      <wms:OrderIdentification>
+        <wms:ExternalOrderId>{{- content.orderId | xml_escape -}}</wms:ExternalOrderId>
+        <wms:CustomerId>{{- content.customerId | xml_escape -}}</wms:CustomerId>
+        {%- unless content.customerReference == blank %}
+        <wms:CustomerReference>{{- content.customerReference | xml_escape -}}</wms:CustomerReference>
+        {%- endunless %}
+      </wms:OrderIdentification>
+
+      <!-- ── Warehouse and Scheduling ── -->
+      <wms:WarehouseDetails>
+        <wms:WarehouseCode>{{- content.warehouseCode | xml_escape -}}</wms:WarehouseCode>
+        <wms:Priority>{{- content.priority | default: 'STANDARD' -}}</wms:Priority>
+        <wms:OrderDate>{{- content.orderDate -}}</wms:OrderDate>
+        {%- unless content.requestedDeliveryDate == blank %}
+        <wms:RequestedDeliveryDate>{{- content.requestedDeliveryDate -}}</wms:RequestedDeliveryDate>
+        {%- endunless %}
+      </wms:WarehouseDetails>
+
+      <!-- ── Order Lines ── -->
+      <wms:OrderLines totalLines="{{- content.lines.size -}}">
+        {%- for line in content.lines %}
+        <wms:OrderLine sequence="{{- line.lineNo -}}">
+          <wms:LineNumber>{{- line.lineNo -}}</wms:LineNumber>
+          <wms:ItemCode>{{- line.sku | xml_escape -}}</wms:ItemCode>
+          {%- if line.description == blank %}
+          <wms:ItemDescription xsi:nil="true"/>
+          {%- else %}
+          <wms:ItemDescription>{{- line.description | xml_escape -}}</wms:ItemDescription>
+          {%- endif %}
+          <wms:OrderedQuantity>{{- line.quantity -}}</wms:OrderedQuantity>
+          <wms:UnitOfMeasure>{{- line.uom | default: 'EA' -}}</wms:UnitOfMeasure>
+          {%- unless line.lotNumber == blank %}
+          <wms:LotNumber>{{- line.lotNumber | xml_escape -}}</wms:LotNumber>
+          {%- endunless %}
+          {%- unless line.serialNumber == blank %}
+          <wms:SerialNumber>{{- line.serialNumber | xml_escape -}}</wms:SerialNumber>
+          {%- endunless %}
+        </wms:OrderLine>
+        {%- endfor %}
+      </wms:OrderLines>
+
+      <!-- ── Ship-To Address (entire element omitted if shipTo not provided) ── -->
+      {%- if content.shipTo %}
+      <wms:ShipToAddress>
+        <wms:AddressName>{{- content.shipTo.name | xml_escape -}}</wms:AddressName>
+        <wms:AddressLine1>{{- content.shipTo.address1 | xml_escape -}}</wms:AddressLine1>
+        {%- unless content.shipTo.address2 == blank %}
+        <wms:AddressLine2>{{- content.shipTo.address2 | xml_escape -}}</wms:AddressLine2>
+        {%- endunless %}
+        <wms:City>{{- content.shipTo.city | xml_escape -}}</wms:City>
+        {%- unless content.shipTo.state == blank %}
+        <wms:State>{{- content.shipTo.state | xml_escape -}}</wms:State>
+        {%- endunless %}
+        <wms:Country>{{- content.shipTo.country -}}</wms:Country>
+        {%- unless content.shipTo.postcode == blank %}
+        <wms:PostalCode>{{- content.shipTo.postcode | xml_escape -}}</wms:PostalCode>
+        {%- endunless %}
+        {%- unless content.shipTo.contactName == blank %}
+        <wms:ContactName>{{- content.shipTo.contactName | xml_escape -}}</wms:ContactName>
+        {%- endunless %}
+        {%- unless content.shipTo.contactPhone == blank %}
+        <wms:ContactPhone>{{- content.shipTo.contactPhone | xml_escape -}}</wms:ContactPhone>
+        {%- endunless %}
+      </wms:ShipToAddress>
+      {%- endif %}
+
+      <!-- ── Free-text Notes (omit element entirely if blank) ── -->
+      {%- unless content.notes == blank %}
+      <wms:Notes>{{- content.notes | xml_escape -}}</wms:Notes>
+      {%- endunless %}
+
+    </wms:CreateOrderRequest>
+  </soapenv:Body>
+
+</soapenv:Envelope>

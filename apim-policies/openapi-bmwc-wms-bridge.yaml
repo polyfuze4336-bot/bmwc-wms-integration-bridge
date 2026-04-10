@@ -1,0 +1,610 @@
+openapi: "3.0.3"
+
+info:
+  title: "BMWC → WMS Order Bridge API"
+  version: "1.0.0"
+  description: |
+    REST gateway for BMWC order submission to the legacy WMS via Azure Integration Services.
+
+    **Architecture**: BMWC caller → Azure API Management → Logic Apps Standard → Azure Service Bus → WMS SOAP
+
+    **Async pattern**: `POST /orders` returns `202 Accepted` immediately after successful enqueue.
+    The WMS dispatch happens asynchronously. Use `GET /orders/{orderId}/status` to poll for
+    WMS acknowledgement.
+
+    **Idempotency**: `orderId` must be a stable, caller-generated identifier. Submitting the same
+    `orderId` within 10 minutes is safe — Service Bus duplicate detection silently discards
+    the second message. Use a new `orderId` only for genuinely new orders.
+
+    **Timestamps**: All timestamps in both request and response are UTC, ISO 8601 with `Z` suffix.
+    GMT+8 localisation is the responsibility of the calling system.
+  contact:
+    name: "BMWC Integration Platform Team"
+    email: "integration@bmwc.example.com"
+  license:
+    name: "Internal use only"
+
+servers:
+  - url: "https://{apimName}.azure-api.net/bmwc"
+    description: "Azure API Management gateway"
+    variables:
+      apimName:
+        default: "apim-bmwc-wms-dev"
+        description: "APIM service name (varies by environment)"
+
+security:
+  - subscriptionKey: []
+
+tags:
+  - name: "Orders"
+    description: "BMWC order submission and status operations"
+
+paths:
+
+  /orders:
+    post:
+      operationId: "submitOrder"
+      summary: "Submit a BMWC order for WMS dispatch"
+      description: |
+        Accepts a canonical BMWC JSON order payload, validates it, and enqueues it on
+        Azure Service Bus for asynchronous dispatch to the legacy WMS SOAP service.
+
+        Returns `202 Accepted` with a correlation ID and enqueue timestamp.
+        The WMS acknowledgement (`wmsOrderId`) is available asynchronously via
+        `GET /orders/{orderId}/status`.
+
+        **Idempotency**: safe to retry with the same `orderId` within 10 minutes.
+      tags:
+        - "Orders"
+      parameters:
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BmwcOrder"
+            examples:
+              standard-order:
+                summary: "Standard 3-line order with ship-to address"
+                $ref: "#/components/examples/StandardOrder"
+              minimal-order:
+                summary: "Minimal order (required fields only)"
+                $ref: "#/components/examples/MinimalOrder"
+      responses:
+        "202":
+          description: "Order accepted — queued for asynchronous WMS dispatch"
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationId"
+            X-Workflow-Run-ID:
+              $ref: "#/components/headers/WorkflowRunId"
+            X-BMWC-Gateway:
+              $ref: "#/components/headers/GatewayId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderAccepted"
+              example:
+                status: "QUEUED"
+                message: "Order accepted for asynchronous WMS dispatch"
+                orderId: "ORD-2026-SGP-001"
+                correlationId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                workflowRunId: "08585012345678901234567890ABCDEF"
+                enqueuedAtUtc: "2026-04-09T02:00:01Z"
+        "400":
+          description: "Validation failure — payload does not conform to schema"
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                missing-required:
+                  summary: "Missing required field"
+                  value:
+                    status: "VALIDATION_ERROR"
+                    code: "SCHEMA_VALIDATION_FAILED"
+                    message: "Request body does not conform to the required schema. Missing required property: 'orderId'."
+                    correlationId: "d9e8f7a6-b5c4-3210-fedc-ba9876543210"
+                    timestamp: "2026-04-09T02:00:05Z"
+                bad-timestamp:
+                  summary: "Invalid timestamp format"
+                  value:
+                    status: "VALIDATION_ERROR"
+                    code: "TIMESTAMP_PARSE_FAILED"
+                    message: "Field 'orderDate' could not be parsed as ISO 8601. Value received: '09/04/2026 10:00 AM'."
+                    correlationId: "b9c8d7e6-f5a4-3210-9876-fedcba123456"
+                    timestamp: "2026-04-09T02:00:08Z"
+        "401":
+          description: "Missing or invalid subscription key"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "UNAUTHORIZED"
+                code: "SUBSCRIPTION_KEY_INVALID"
+                message: "Access denied due to missing or invalid subscription key."
+                timestamp: "2026-04-09T02:00:03Z"
+        "403":
+          description: "Caller IP address not in the allowlist"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "FORBIDDEN"
+                code: "IP_NOT_ALLOWED"
+                message: "The request origin IP address is not permitted to call this API."
+                timestamp: "2026-04-09T02:00:03Z"
+        "413":
+          description: "Payload exceeds 256 KB maximum"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "PAYLOAD_TOO_LARGE"
+                code: "MAX_PAYLOAD_EXCEEDED"
+                message: "Request body exceeds the maximum allowed size of 256 KB."
+                correlationId: "e2f3a4b5-c6d7-8901-2345-fedcba678901"
+                timestamp: "2026-04-09T02:00:06Z"
+        "415":
+          description: "Content-Type is not application/json"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "UNSUPPORTED_MEDIA_TYPE"
+                code: "CONTENT_TYPE_REQUIRED"
+                message: "Content-Type must be application/json"
+                correlationId: "f1a2b3c4-d5e6-7890-1234-abcdef567890"
+                timestamp: "2026-04-09T02:00:04Z"
+        "429":
+          description: "Rate limit or weekly quota exceeded"
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: "Seconds to wait before retrying"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "RATE_LIMITED"
+                code: "RATE_LIMIT_EXCEEDED"
+                message: "Too many requests. You have exceeded the rate limit of 100 calls per minute."
+                correlationId: "f0a1b2c3-d4e5-6789-abcd-0123456789ef"
+                retryAfterSeconds: 60
+                timestamp: "2026-04-09T02:00:07Z"
+        "500":
+          description: "Internal gateway error — order was NOT enqueued; retry with same orderId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "ERROR"
+                code: "ENQUEUE_FAILED"
+                message: "Order could not be queued for WMS dispatch. Retry with the same orderId."
+                orderId: "ORD-2026-SGP-001"
+                correlationId: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+                failedAtUtc: "2026-04-09T02:00:09Z"
+        "504":
+          description: "Gateway timeout — Logic Apps did not respond within 30 seconds"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "ERROR"
+                code: "GATEWAY_TIMEOUT"
+                message: "The backend did not respond within the allowed time. Retry with the same orderId."
+                correlationId: "a9b8c7d6-e5f4-3210-9876-fedcba012345"
+                timestamp: "2026-04-09T02:00:31Z"
+
+  /orders/{orderId}/status:
+    get:
+      operationId: "getOrderStatus"
+      summary: "Query WMS dispatch status for a submitted order"
+      description: |
+        Returns the current WMS dispatch status for a previously submitted BMWC order.
+
+        **Note (demo)**: This operation currently returns a mock response.
+        A live implementation requires a state store written to by `wms-soap-dispatcher`
+        on WMS acknowledgement (see `TRANSFORMATION_SPEC.md`).
+
+        **Polling interval**: Poll no more frequently than every 15 seconds.
+        WMS async dispatch typically completes within 30–120 seconds of submission.
+      tags:
+        - "Orders"
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          description: "BMWC order identifier (e.g. ORD-2026-SGP-001)"
+          schema:
+            type: string
+            pattern: "^[A-Z0-9\\-]{1,50}$"
+            example: "ORD-2026-SGP-001"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      responses:
+        "200":
+          description: "Order status retrieved"
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationId"
+            X-BMWC-Gateway:
+              $ref: "#/components/headers/GatewayId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderStatus"
+              examples:
+                wms-accepted:
+                  summary: "WMS accepted the order"
+                  value:
+                    orderId: "ORD-2026-SGP-001"
+                    status: "WMS_ACCEPTED"
+                    wmsOrderId: "WMS-1744167600001-428"
+                    warehouseRef: "WH-SIN-ORD-2026-SGP-001"
+                    estimatedReadyDate: "2026-04-10"
+                    correlationId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    enqueuedAtUtc: "2026-04-09T02:00:01Z"
+                    dispatchedAtUtc: "2026-04-09T02:00:45Z"
+                still-queued:
+                  summary: "Order pending WMS dispatch"
+                  value:
+                    orderId: "ORD-2026-SGP-002"
+                    status: "QUEUED"
+                    message: "Order is pending WMS dispatch"
+                    correlationId: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                    enqueuedAtUtc: "2026-04-09T02:01:00Z"
+        "400":
+          description: "Invalid orderId path parameter"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/paths/~1orders/post/responses/401"
+        "404":
+          description: "Order not found — orderId unknown or not yet indexed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: "NOT_FOUND"
+                code: "ORDER_NOT_FOUND"
+                message: "No order found with orderId 'ORD-2026-UNKNOWN'. Verify the orderId or check submission status."
+                correlationId: "c3d4e5f6-a7b8-9012-cdef-123456789abc"
+                timestamp: "2026-04-09T02:05:00Z"
+
+components:
+
+  securitySchemes:
+    subscriptionKey:
+      type: apiKey
+      in: header
+      name: Ocp-Apim-Subscription-Key
+      description: |
+        APIM subscription key. Obtain from the BMWC Integration developer portal or
+        from the Azure Portal → API Management → Subscriptions.
+
+  parameters:
+    CorrelationIdHeader:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: |
+        Client-supplied correlation GUID for end-to-end tracing.
+        If absent, APIM generates one and returns it in the response header.
+        Use this value to search Logic Apps run history and Log Analytics.
+      schema:
+        type: string
+        format: uuid
+        example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+  headers:
+    CorrelationId:
+      description: "End-to-end correlation GUID — present on all responses"
+      schema:
+        type: string
+        format: uuid
+    WorkflowRunId:
+      description: "Logic Apps workflow run ID — use to find the run in Azure Portal → Logic Apps → Run History"
+      schema:
+        type: string
+    GatewayId:
+      description: "Gateway identity string — format: bmwc-wms-bridge/{version}"
+      schema:
+        type: string
+
+  schemas:
+
+    BmwcOrder:
+      type: object
+      required:
+        - orderId
+        - customerId
+        - warehouseCode
+        - orderDate
+        - lines
+      additionalProperties: true
+      properties:
+        orderId:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: "^[A-Z0-9\\-]+$"
+          description: "BMWC order reference. Idempotency key — used as Service Bus messageId."
+          example: "ORD-2026-SGP-001"
+        customerId:
+          type: string
+          minLength: 1
+          maxLength: 50
+          example: "CUST-BMWC-001"
+        warehouseCode:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: "Target WMS warehouse code — must exist in WMS master data."
+          example: "WH-SIN"
+        orderDate:
+          type: string
+          description: "ISO 8601 date-time. Normalised to UTC by the integration layer."
+          example: "2026-04-09T10:00:00+08:00"
+        priority:
+          type: string
+          enum: ["STANDARD", "URGENT", "EXPEDITE"]
+          default: "STANDARD"
+        requestedDeliveryDate:
+          type: string
+          description: "ISO 8601 delivery deadline. Optional."
+          example: "2026-04-11T00:00:00Z"
+        customerReference:
+          type: string
+          maxLength: 100
+          description: "BMWC purchase order or work order reference."
+          example: "PO-BMWC-2026-045"
+        notes:
+          type: string
+          maxLength: 500
+          description: "Free-text warehouse instructions."
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: "#/components/schemas/OrderLine"
+        shipTo:
+          $ref: "#/components/schemas/ShipToAddress"
+
+    OrderLine:
+      type: object
+      required:
+        - lineNo
+        - sku
+        - quantity
+      additionalProperties: false
+      properties:
+        lineNo:
+          type: integer
+          minimum: 1
+          description: "Sequential line number — unique within the order."
+          example: 1
+        sku:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: "BMWC stock-keeping unit. Must exist in WMS item master."
+          example: "SKU-W-001"
+        description:
+          type: string
+          maxLength: 255
+          description: "Human-readable item description. Informational only."
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          description: "Dispatch quantity. Must be greater than zero."
+          example: 50
+        uom:
+          type: string
+          maxLength: 10
+          default: "EA"
+          description: "Unit of measure. Defaults to EA (each)."
+          example: "EA"
+        lotNumber:
+          type: string
+          maxLength: 50
+        serialNumber:
+          type: string
+          maxLength: 100
+
+    ShipToAddress:
+      type: object
+      required:
+        - name
+        - address1
+        - city
+        - country
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: "BMWC Assembly Plant 1"
+        address1:
+          type: string
+          maxLength: 150
+        address2:
+          type: string
+          maxLength: 150
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          description: "ISO 3166-1 alpha-2 country code."
+          example: "MY"
+        postcode:
+          type: string
+          maxLength: 20
+        contactName:
+          type: string
+          maxLength: 100
+        contactPhone:
+          type: string
+          maxLength: 30
+
+    OrderAccepted:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: ["QUEUED"]
+          example: "QUEUED"
+        message:
+          type: string
+          example: "Order accepted for asynchronous WMS dispatch"
+        orderId:
+          type: string
+          example: "ORD-2026-SGP-001"
+        correlationId:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          description: "Logic Apps run ID — use for Azure Portal run history lookup."
+        enqueuedAtUtc:
+          type: string
+          format: date-time
+          description: "UTC timestamp when the message entered Service Bus."
+
+    OrderStatus:
+      type: object
+      properties:
+        orderId:
+          type: string
+        status:
+          type: string
+          enum:
+            - "QUEUED"
+            - "WMS_DISPATCHING"
+            - "WMS_ACCEPTED"
+            - "WMS_REJECTED"
+            - "DISPATCH_FAILED"
+          description: |
+            Status lifecycle:
+            QUEUED → WMS_DISPATCHING → WMS_ACCEPTED
+                                     → WMS_REJECTED   (SOAP Fault from WMS)
+                                     → DISPATCH_FAILED (DLQ after 5 retries)
+        wmsOrderId:
+          type: string
+          description: "WMS-assigned order reference. Present only when status is WMS_ACCEPTED."
+          example: "WMS-1744167600001-428"
+        warehouseRef:
+          type: string
+        estimatedReadyDate:
+          type: string
+          description: "Warehouse estimated ready date (date only, UTC)."
+          example: "2026-04-10"
+        message:
+          type: string
+        correlationId:
+          type: string
+          format: uuid
+        enqueuedAtUtc:
+          type: string
+          format: date-time
+        dispatchedAtUtc:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: "Error category"
+          example: "VALIDATION_ERROR"
+        code:
+          type: string
+          description: "Machine-readable error code"
+          example: "SCHEMA_VALIDATION_FAILED"
+        message:
+          type: string
+          description: "Human-readable error description"
+        detail:
+          type: string
+          description: "Additional detail (present on validation errors)"
+        correlationId:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          description: "Present on order-specific errors"
+        retryAfterSeconds:
+          type: integer
+          description: "Present on 429 responses"
+        timestamp:
+          type: string
+          format: date-time
+
+  examples:
+
+    StandardOrder:
+      value:
+        orderId: "ORD-2026-SGP-001"
+        customerId: "CUST-BMWC-001"
+        warehouseCode: "WH-SIN"
+        orderDate: "2026-04-09T10:00:00+08:00"
+        priority: "STANDARD"
+        customerReference: "PO-BMWC-2026-045"
+        notes: "Handle with care — fragile components"
+        lines:
+          - lineNo: 1
+            sku: "SKU-W-001"
+            description: "Wheel Assembly Type A"
+            quantity: 50
+            uom: "EA"
+          - lineNo: 2
+            sku: "SKU-T-022"
+            description: "Tyre XR 235/55R18"
+            quantity: 200
+            uom: "EA"
+          - lineNo: 3
+            sku: "SKU-E-055"
+            description: "Engine Gasket Set"
+            quantity: 10
+            uom: "SET"
+        shipTo:
+          name: "BMWC Assembly Plant 1"
+          address1: "Lot 5, Jalan Jubli Perak"
+          city: "Shah Alam"
+          state: "Selangor"
+          country: "MY"
+          postcode: "40150"
+          contactName: "Ahmad Fauzi"
+          contactPhone: "+601112345678"
+
+    MinimalOrder:
+      value:
+        orderId: "ORD-2026-MIN-001"
+        customerId: "CUST-BMWC-002"
+        warehouseCode: "WH-KUL"
+        orderDate: "2026-04-09T02:00:00Z"
+        lines:
+          - lineNo: 1
+            sku: "SKU-X-099"
+            quantity: 5

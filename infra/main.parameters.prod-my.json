@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+
+  "_comment": [
+    "PRODUCTION — Malaysia South (Kuala Lumpur, secondary region)",
+    "Identical settings to prod-sg except region = malaysiasouth.",
+    "Both regions are independent deployments. No active-active replication is wired by default.",
+    "To add DR failover, configure Azure Traffic Manager or Front Door to failover",
+    "between southeastasia and malaysiasouth APIM gateway URLs."
+  ],
+
+  "parameters": {
+    "environmentName":           { "value": "prod-my" },
+    "location":                  { "value": "malaysiasouth" },
+
+    "apimPublisherEmail":        { "value": "integration-ops@bmwc.example.com" },
+    "apimPublisherName":         { "value": "BMWC Integration Platform" },
+
+    "wmsSoapEndpoint":           { "value": "https://wms-my.bmwc.internal/WMSService.svc" },
+
+    "allowedClientIps":          { "value": ["10.0.0.0/8"] },
+    "apimSamplingPercentage":    { "value": 10 },
+    "apimRateLimitCalls":        { "value": 500 },
+    "apimRateLimitPeriod":       { "value": 60 },
+    "apimQuotaCalls":            { "value": 5000000 },
+    "apimQuotaPeriod":           { "value": 2592000 },
+
+    "inboundQueueName":          { "value": "wms-inbound" },
+    "deadLetterQueueName":       { "value": "wms-dead-letter-review" },
+    "messageTtl":                { "value": "PT8H" },
+    "maxDeliveryCount":          { "value": 5 },
+    "sbLockDuration":            { "value": "PT10M" },
+
+    "logRetentionDays":          { "value": 90 },
+    "logDailyQuotaGb":           { "value": -1 },
+
+    "maxElasticWorkers":         { "value": 10 },
+
+    "kvSoftDeleteRetentionDays": { "value": 90 },
+    "kvEnablePurgeProtection":   { "value": true }
+  }
+}

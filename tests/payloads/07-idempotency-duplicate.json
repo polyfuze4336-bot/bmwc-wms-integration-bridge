@@ -1,0 +1,27 @@
+{
+  "_scenario": "IDEMPOTENCY — Duplicate submission of ORD-2026-SGP-001",
+  "_notes": "Identical orderId to scenario 01. Service Bus duplicate detection window is 10 minutes. If submitted within 10 minutes of the first submission, the message is silently deduplicated at the Service Bus level and never re-delivered to the dispatcher. Expected outcome: APIM returns 202 Accepted (the ingress workflow does not distinguish a new from a duplicate — the guarantee is that WMS sees it at most once). Demonstrate by checking Service Bus metrics: message count on wms-inbound queue does NOT increment. Log Analytics shows no new ENQUEUE_SUCCESS event for this orderId after the first.",
+
+  "orderId": "ORD-2026-SGP-001",
+  "customerId": "CUST-BMWC-001",
+  "warehouseCode": "WH-SIN",
+  "orderDate": "2026-04-10T02:00:00Z",
+  "priority": "STANDARD",
+
+  "lines": [
+    {
+      "lineNo": 1,
+      "sku": "SKU-W-001",
+      "description": "Wheel Assembly Type A",
+      "quantity": 50,
+      "uom": "EA"
+    }
+  ],
+
+  "shipTo": {
+    "name": "BMWC Assembly Plant 1",
+    "address1": "Lot 5, Jalan Jubli Perak",
+    "city": "Shah Alam",
+    "country": "MY"
+  }
+}

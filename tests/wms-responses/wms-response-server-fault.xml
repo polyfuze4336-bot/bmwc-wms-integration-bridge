@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WMS SOAP Response — SERVER FAULT (transient)
+  Scenario: WMS returns a server-side 500 (database unavailable, maintenance window,
+  connection pool exhaustion). This is a transient fault — the wms-soap-dispatcher
+  will retry with exponential back-off: 5s → 30s → 120s (3 attempts before
+  incrementing delivery count). Within maxDeliveryCount attempts across restart cycles
+  the message will be reprocessed automatically.
+
+  The HTTP transport layer also returns HTTP 500, which Logic Apps treats as a
+  retryable error when the retry policy is configured.
+
+  faultcode "Server" signals a server-side issue — do NOT dead-letter immediately.
+-->
+<soap:Envelope
+    xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:wms="http://wms.legacy.corp/v1">
+
+  <soap:Header>
+    <wms:ResponseHeader>
+      <wms:CorrelationId>c3d4e5f6-a7b8-9012-cdef-123456789012</wms:CorrelationId>
+      <wms:ResponseTimestamp>2026-04-10T03:00:05Z</wms:ResponseTimestamp>
+    </wms:ResponseHeader>
+  </soap:Header>
+
+  <soap:Body>
+    <soap:Fault>
+      <faultcode>soap:Server</faultcode>
+      <faultstring>Internal server error: database connection pool exhausted. Retry after 30 seconds.</faultstring>
+      <detail>
+        <wms:FaultDetail>
+          <wms:ErrorCode>WMS-SRV-500</wms:ErrorCode>
+          <wms:RetryAfterSeconds>30</wms:RetryAfterSeconds>
+          <wms:ExternalOrderId>ORD-2026-SGP-TRANSIENT-001</wms:ExternalOrderId>
+        </wms:FaultDetail>
+      </detail>
+    </soap:Fault>
+  </soap:Body>
+
+</soap:Envelope>

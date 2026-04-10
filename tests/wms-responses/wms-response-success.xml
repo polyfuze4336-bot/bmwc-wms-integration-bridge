@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WMS SOAP Response — SUCCESS
+  Scenario: CreateOrder accepted, WMS assigns internal order number and estimated ready date.
+  Correlates to BMWC orderId ORD-2026-SGP-001, correlationId echoed from request header.
+  The wms-soap-dispatcher workflow extracts:
+    - wmsOrderId  → stored in Log Analytics as wmsOrderId property
+    - Status      → checked; "SUCCESS" triggers WMS_DISPATCH_SUCCESS log event
+    - EstimatedReadyDate → stored in Log Analytics trace for reporting
+-->
+<soap:Envelope
+    xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:wms="http://wms.legacy.corp/v1">
+
+  <soap:Header>
+    <wms:ResponseHeader>
+      <wms:CorrelationId>a1b2c3d4-e5f6-7890-abcd-ef1234567890</wms:CorrelationId>
+      <wms:ResponseTimestamp>2026-04-10T02:00:01Z</wms:ResponseTimestamp>
+    </wms:ResponseHeader>
+  </soap:Header>
+
+  <soap:Body>
+    <wms:CreateOrderResponse>
+      <wms:Status>SUCCESS</wms:Status>
+      <wms:WmsOrderId>WMS-1744250401000-347</wms:WmsOrderId>
+      <wms:Message>Order ORD-2026-SGP-001 accepted by WMS warehouse WH-SIN</wms:Message>
+      <wms:EstimatedReadyDate>2026-04-11</wms:EstimatedReadyDate>
+      <wms:WarehouseRef>WH-SIN-ORD-2026-SGP-001</wms:WarehouseRef>
+    </wms:CreateOrderResponse>
+  </soap:Body>
+
+</soap:Envelope>

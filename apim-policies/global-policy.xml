@@ -1,0 +1,80 @@
+<!--
+  apim-policies/global-policy.xml
+  ──────────────────────────────────────────────────────────────────────────────
+  Scope:    ALL APIs in the BMWC → WMS Bridge APIM instance
+  Purpose:
+    1. CORS         — permit browser tooling (Swagger UI, Postman web) during demo
+    2. Correlation  — generate X-Correlation-ID if caller omits it; echo on response
+    3. Security     — strip subscription key before backend; remove implementation
+                       headers (Server, X-Powered-By) from all responses
+    4. Gateway ID   — tag all responses with X-BMWC-Gateway for traceability
+
+  Production hardening (not in scope for demo):
+    - Narrow <allowed-origins> to specific BMWC portal domains
+    - Add <validate-azure-ad-token> at global or API scope
+    - Add <log-to-eventhub> for compliance audit trail
+    - Add <quota-by-key> keyed on JWT sub claim (not subscription key)
+  ──────────────────────────────────────────────────────────────────────────────
+-->
+<policies>
+    <inbound>
+        <!-- CORS: restrict origins in production — wildcard is demo-only -->
+        <cors allow-credentials="false">
+            <allowed-origins>
+                <origin>*</origin>
+            </allowed-origins>
+            <allowed-methods preflight-result-max-age="300">
+                <method>GET</method>
+                <method>POST</method>
+                <method>OPTIONS</method>
+            </allowed-methods>
+            <allowed-headers>
+                <header>Content-Type</header>
+                <header>Ocp-Apim-Subscription-Key</header>
+                <header>X-Correlation-ID</header>
+                <header>Authorization</header>
+            </allowed-headers>
+            <expose-headers>
+                <header>X-Correlation-ID</header>
+                <header>X-Workflow-Run-ID</header>
+                <header>X-BMWC-Gateway</header>
+            </expose-headers>
+        </cors>
+
+        <!-- Generate correlation ID if caller did not supply one.
+             Use context.RequestId (unique per APIM request) so the same ID
+             can locate this call in both APIM diagnostics and Logic Apps run history. -->
+        <set-header name="X-Correlation-ID" exists-action="skip">
+            <value>@(context.RequestId.ToString())</value>
+        </set-header>
+
+        <!-- Strip subscription key before forwarding to Logic Apps.
+             The key must never reach the backend or appear in its logs. -->
+        <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    </inbound>
+
+    <backend>
+        <forward-request />
+    </backend>
+
+    <outbound>
+        <!-- Echo correlation ID on every response — enables end-to-end trace -->
+        <set-header name="X-Correlation-ID" exists-action="override">
+            <value>@(context.Request.Headers.GetValueOrDefault("X-Correlation-ID", context.RequestId.ToString()))</value>
+        </set-header>
+
+        <!-- Gateway identity — useful for support triage -->
+        <set-header name="X-BMWC-Gateway" exists-action="override">
+            <value>bmwc-wms-bridge/1.0</value>
+        </set-header>
+
+        <!-- Remove implementation-detail headers that reveal backend technology -->
+        <set-header name="Server" exists-action="delete" />
+        <set-header name="X-Powered-By" exists-action="delete" />
+        <set-header name="X-AspNet-Version" exists-action="delete" />
+    </outbound>
+
+    <on-error>
+        <base />
+    </on-error>
+</policies>

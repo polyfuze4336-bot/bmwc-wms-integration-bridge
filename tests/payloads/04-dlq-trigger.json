@@ -1,0 +1,28 @@
+{
+  "_scenario": "DLQ DEMO — Trigger intentional WMS fault then verify DLQ consolidation",
+  "_notes": "Submit 3 copies of this order (incrementing orderId suffix each time) while the WMS mock is configured to return a SOAP Fault for any warehouseCode starting with 'WH-DLQ'. All 3 messages will exhaust retries and land in the dead-letter queue. The dlq-monitor workflow (15-min schedule) will then batch them into a single DLQ_ALERT_SUMMARY log event. Switch the mock back to SUCCESS mode and use the 'Resubmit from DLQ' pattern to manually re-process. Expected outcome: 3 DLQ entries visible in Service Bus Explorer; 1 DLQ_ALERT_SUMMARY event in Log Analytics; alert fires to Azure Monitor action group (if wired).",
+
+  "orderId": "ORD-2026-DLQ-001",
+  "customerId": "CUST-BMWC-DLQ",
+  "warehouseCode": "WH-DLQ",
+  "orderDate": "2026-04-10T04:00:00Z",
+  "priority": "STANDARD",
+
+  "lines": [
+    {
+      "lineNo": 1,
+      "sku": "SKU-X-999",
+      "description": "Unknown SKU — will be rejected by WMS",
+      "quantity": 1,
+      "uom": "EA"
+    }
+  ],
+
+  "shipTo": {
+    "name": "Test Recipient — DLQ Demo",
+    "address1": "1 Integration Drive",
+    "city": "Singapore",
+    "country": "SG",
+    "postcode": "018989"
+  }
+}
