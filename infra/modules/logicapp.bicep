@@ -102,10 +102,12 @@ resource logicApp 'Microsoft.Web/sites@2022-03-01' = {
         { name: 'WEBSITE_NODE_DEFAULT_VERSION', value: '~18' }
 
         // Storage — identity-based (no shared key; Azure Policy enforced)
+        // AzureWebJobsStorage uses __accountName + __credential for MI access (Functions runtime)
+        // WEBSITE_CONTENTAZUREFILECONNECTIONSTRING uses ResourceId format — required by ARM validator
+        // even when WEBSITE_SKIP_CONTENTSHARE_VALIDATION=1; actual mount uses MI via role assignments
         { name: 'AzureWebJobsStorage__accountName', value: storageAccount.name }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
-        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING__accountName', value: storageAccount.name }
-        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING__credential', value: 'managedidentity' }
+        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: 'ResourceId=/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Storage/storageAccounts/${storageAccount.name}' }
         { name: 'WEBSITE_CONTENTSHARE', value: toLower(name) }
         { name: 'WEBSITE_SKIP_CONTENTSHARE_VALIDATION', value: '1' }
 
