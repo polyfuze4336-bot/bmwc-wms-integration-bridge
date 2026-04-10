@@ -24,7 +24,7 @@
   },
 
   "DlqAlertThreshold": {
-    "value": "1",
+    "value": 1,
     "description": "Minimum DLQ message count before dlq-monitor emits a DLQ_ALERT_SUMMARY log. Increase in production if occasional DLQ entries are acceptable."
   }
 }

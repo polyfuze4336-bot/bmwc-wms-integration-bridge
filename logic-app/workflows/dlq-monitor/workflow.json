@@ -98,11 +98,11 @@
         "runAfter": {
           "Set_DLQ_Count": ["Succeeded"]
         },
-        "description": "Alert threshold: any dead-lettered messages present (> 0). Tune to a higher number (e.g. > 5) in production if occasional DLQ messages are operationally acceptable.",
+        "description": "Alert threshold driven by DlqAlertThreshold parameter (default 1). Tune to a higher number in production if occasional DLQ messages are operationally acceptable.",
         "expression": {
           "and": [
             {
-              "greater": ["@variables('dlqMessageCount')", 0]
+              "greaterOrEquals": ["@variables('dlqMessageCount')", "@parameters('DlqAlertThreshold')"]
             }
           ]
         },

@@ -6,7 +6,7 @@
     "triggers": {
       "Service_Bus_Message_Received": {
         "type": "ServiceProvider",
-        "description": "Peek-lock: Logic Apps holds a 5-minute lock on each message. The runtime completes (settles) the message only when the workflow run succeeds. If the run fails or times out, the lock expires, delivery count increments, and Service Bus retries up to maxDeliveryCount (5). After 5 failed deliveries the message is dead-lettered automatically.",
+        "description": "Peek-lock: Logic Apps holds a 10-minute lock on each message (lockDuration: PT10M set on the wms-inbound queue in servicebus.bicep). The runtime completes (settles) the message only when the workflow run succeeds. If the run fails or times out, the lock expires, delivery count increments, and Service Bus retries up to maxDeliveryCount (5). After 5 failed deliveries the message is dead-lettered automatically.",
         "inputs": {
           "parameters": {
             "entityName":         "@parameters('ServiceBusQueueName')",
