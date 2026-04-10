@@ -20,7 +20,8 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 50,
-                "description": "BMWC-assigned order identifier — used as Service Bus messageId for deduplication"
+                "pattern": "^[A-Z0-9\\-]+$",
+                "description": "BMWC-assigned order identifier — uppercase alphanumeric + hyphens only. Used as Service Bus messageId for deduplication."
               },
               "customerId": {
                 "type": "string",
