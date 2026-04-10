@@ -1,8 +1,5 @@
 {%- comment -%}
-  logic-app/lib/maps/bmwc-order-to-wms-soap.liquid
-  ─────────────────────────────────────────────────────────────────────────────
-  DEPLOYABLE COPY — this is the file Logic Apps Standard reads at runtime.
-  Source of record: maps/bmwc-order-to-wms-soap.liquid (identical content)
+  maps/bmwc-order-to-wms-soap.liquid
   ─────────────────────────────────────────────────────────────────────────────
   Transform:   BMWC canonical JSON  →  WMS SOAP 1.1 CreateOrderRequest envelope
   Engine:      DotLiquid  (Logic Apps Standard built-in Liquid action)
@@ -10,6 +7,7 @@
   WMS ns:      http://wms.legacy.corp/v1  ← replace with actual WSDL targetNamespace
   WMS op:      CreateOrder
   SOAPAction:  "http://wms.legacy.corp/v1/CreateOrder"    (set on HTTP action header)
+  Map path:    logic-app/lib/maps/bmwc-order-to-wms-soap.liquid
   Map name:    bmwc-order-to-wms-soap   (referenced by name without extension)
   ─────────────────────────────────────────────────────────────────────────────
   INPUT CONTRACT  (content object — built by Compose_SOAP_Input action):

@@ -1,12 +1,10 @@
 {%- comment -%}
-  logic-app/lib/maps/wms-soap-response-to-json.liquid
-  ─────────────────────────────────────────────────────────────────────────────
-  DEPLOYABLE COPY — this is the file Logic Apps Standard reads at runtime.
-  Source of record: maps/wms-soap-response-to-json.liquid (identical content)
+  maps/wms-soap-response-to-json.liquid
   ─────────────────────────────────────────────────────────────────────────────
   Transform:   WMS SOAP 1.1 CreateOrderResponse  →  BMWC canonical JSON status
   Engine:      DotLiquid  (Logic Apps Standard built-in Liquid action)
   Map kind:    JsonToJson   (input is the JSON object produced by xml() function)
+  Map path:    logic-app/lib/maps/wms-soap-response-to-json.liquid
   Map name:    wms-soap-response-to-json
   ─────────────────────────────────────────────────────────────────────────────
   PRE-PROCESSING REQUIRED in the workflow (Compose_Parse_WMS_Response action):
