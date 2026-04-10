@@ -46,11 +46,9 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
     supportsHttpsTrafficOnly: true
-    allowSharedKeyAccess: true   // Required by Logic Apps runtime; disable after UAMI support
+    allowSharedKeyAccess: false  // Azure Policy: identity-based access only; MI role assignments below
   }
 }
-
-var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
 // Pre-create the content file share so ARM doesn't attempt it during LA deployment
 // (which can fail with 403 if the storage account is not yet fully propagated)
@@ -103,10 +101,13 @@ resource logicApp 'Microsoft.Web/sites@2022-03-01' = {
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'node' }
         { name: 'WEBSITE_NODE_DEFAULT_VERSION', value: '~18' }
 
-        // Storage (Logic Apps runtime + content share)
-        { name: 'AzureWebJobsStorage', value: storageConnectionString }
-        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: storageConnectionString }
+        // Storage — identity-based (no shared key; Azure Policy enforced)
+        { name: 'AzureWebJobsStorage__accountName', value: storageAccount.name }
+        { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
+        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING__accountName', value: storageAccount.name }
+        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING__credential', value: 'managedidentity' }
         { name: 'WEBSITE_CONTENTSHARE', value: toLower(name) }
+        { name: 'WEBSITE_SKIP_CONTENTSHARE_VALIDATION', value: '1' }
 
         // Observability
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
@@ -145,6 +146,50 @@ resource logicApp 'Microsoft.Web/sites@2022-03-01' = {
     // Regional VNet integration: all outbound traffic routed through VNet
     virtualNetworkSubnetId: logicAppSubnetId
     vnetRouteAllEnabled: true
+  }
+}
+
+// ── Role Assignments: Storage Account (MI-only access) ───────────────────────
+// Required because allowSharedKeyAccess: false — Azure Policy enforced.
+// Logic App MI must have these 4 roles to access blobs, queues, tables, and file share.
+
+resource storageBlobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, logicApp.id, 'storage-blob-owner')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
+    principalId: logicApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageQueueDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, logicApp.id, 'storage-queue-contributor')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
+    principalId: logicApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageTableDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, logicApp.id, 'storage-table-contributor')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
+    principalId: logicApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageFilePrivilegedContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, logicApp.id, 'storage-file-privileged')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69566ab7-960f-475b-8e7c-b3118f30c6bd')
+    principalId: logicApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
