@@ -29,6 +29,6 @@
     "maxElasticWorkers":         { "value": 3 },
 
     "kvSoftDeleteRetentionDays": { "value": 7 },
-    "kvEnablePurgeProtection":   { "value": false }
+    "kvEnablePurgeProtection":   { "value": true }
   }
 }
