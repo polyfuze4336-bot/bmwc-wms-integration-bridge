@@ -52,6 +52,21 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 
 var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
+// Pre-create the content file share so ARM doesn't attempt it during LA deployment
+// (which can fail with 403 if the storage account is not yet fully propagated)
+resource fileServices 'Microsoft.Storage/storageAccounts/fileServices@2023-01-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource contentShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-01-01' = {
+  parent: fileServices
+  name: toLower(name)
+  properties: {
+    shareQuota: 5120
+  }
+}
+
 // ── App Service Plan (Workflow Standard) ─────────────────────────────────────
 resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: planName
@@ -77,6 +92,7 @@ resource logicApp 'Microsoft.Web/sites@2022-03-01' = {
   identity: {
     type: 'SystemAssigned'
   }
+  dependsOn: [ contentShare ]
   properties: {
     serverFarmId: appServicePlan.id
     httpsOnly: true
