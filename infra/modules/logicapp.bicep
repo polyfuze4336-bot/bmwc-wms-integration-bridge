@@ -82,15 +82,28 @@ resource logicApp 'Microsoft.Web/sites@2022-03-01' = {
       appSettings: [
         { name: 'APP_KIND', value: 'workflowApp' }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
-        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'node' }
-        { name: 'WEBSITE_NODE_DEFAULT_VERSION', value: '~18' }
+        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'dotnet' }  // Microsoft now requires 'dotnet' for all Standard logic apps
 
         // Storage — identity-based (no shared key; Azure Policy enforced)
-        // WEBSITE_RUN_FROM_PACKAGE=1: content stored in blob, no Azure Files / SMB mount needed.
-        // This avoids WEBSITE_CONTENTAZUREFILECONNECTIONSTRING which requires account-key auth for
-        // SMB mount — incompatible with allowSharedKeyAccess: false policy enforcement.
+        // ⚠️  KNOWN CONSTRAINT: Logic Apps Standard on Workflow Service Plan (WS1/WS2/WS3)
+        //     REQUIRES Azure Files (SMB) for the home directory runtime state (Sentinels etc.).
+        //     Azure Files SMB authentication requires allowSharedKeyAccess=true on the storage
+        //     account. With allowSharedKeyAccess=false (enforced by Azure Policy in this tenant),
+        //     the Logic App runtime enters Error state: "Access to path C:\home\data\Functions\secrets\Sentinels is denied".
+        //
+        //     To deploy in a policy-restricted tenant, choose ONE of:
+        //       (a) Create a policy exemption for the storage account in this resource group.
+        //       (b) Switch to App Service Environment v3 (ASEv3) hosting, which supports
+        //           identity-based storage WITHOUT requiring allowSharedKeyAccess=true.
+        //           Requires changing the App Service Plan to an ASEv3 plan and setting
+        //           WEBSITE_CONTENTAZUREFILECONNECTIONSTRING to use MI auth.
+        //       (c) Deploy to a subscription/tenant without the allowSharedKeyAccess=false policy.
+        //     See: https://learn.microsoft.com/en-us/azure/logic-apps/create-single-tenant-workflows-azure-portal#set-up-managed-identity-access-to-your-storage-account
+        //
+        // AzureWebJobsStorage uses credentialType=managedIdentity (NOT credential=managedIdentity).
+        // The Logic Apps Edge component validates 'credentialType'; 'credential' causes rejection.
         { name: 'AzureWebJobsStorage__accountName', value: storageAccount.name }
-        { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
+        { name: 'AzureWebJobsStorage__credentialType', value: 'managedIdentity' }
         { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '1' }
         { name: 'WEBSITE_SKIP_CONTENTSHARE_VALIDATION', value: '1' }
 

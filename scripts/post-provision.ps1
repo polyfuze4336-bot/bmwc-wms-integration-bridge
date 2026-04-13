@@ -48,10 +48,10 @@ if (-not $callbackResponse -or -not $callbackResponse.value) {
 
 $triggerUrl  = $callbackResponse.value
 
-# Strip the query string — APIM will call the base URL; query params break routing
-$triggerBase = ($triggerUrl -split '\?')[0]
-
-Write-Host "[post-provision] Trigger base URL: $triggerBase"
+# Keep the FULL URL including query string (sp/sv/sig SAS token).
+# The SAS token is required for APIM to invoke the Logic App HTTP trigger.
+# Stripping the query string would cause 401 Unauthorized from the trigger.
+Write-Host "[post-provision] Trigger URL (with SAS): $triggerUrl"
 
 # ── Update APIM Named Value ────────────────────────────────────────────────
 Write-Host "[post-provision] Updating APIM Named Value 'la-bmwc-ingest-url'..."
@@ -60,7 +60,7 @@ az apim nv update `
     --resource-group $ResourceGroup `
     --service-name $ApimName `
     --named-value-id "la-bmwc-ingest-url" `
-    --value $triggerBase `
+    --value $triggerUrl `
     --output none
 
 Write-Host "[post-provision] Done. APIM is now routing POST /bmwc/orders → Logic App."

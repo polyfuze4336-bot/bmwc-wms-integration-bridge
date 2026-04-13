@@ -581,3 +581,29 @@ All sensitive parameters (`wmsUsername`, `wmsPassword`) must be supplied at depl
 - [ ] Enable Logic App IP restriction (allow only APIM outbound IPs)
 - [ ] Add Azure Front Door or Traffic Manager across `prod-sg` and `prod-my` APIM gateway URLs for DR failover
 - [ ] Set `disableLocalAuth: true` on Service Bus after Managed Identity migration
+
+---
+
+## Known Constraints
+
+### Logic App Standard — Azure Files requirement with `allowSharedKeyAccess: false`
+
+**Symptom:** Logic App runtime enters `Error` state with:
+```
+System.Private.CoreLib: Access to the path 'C:\home\data\Functions\secrets\Sentinels' is denied.
+```
+
+**Root cause:** Logic Apps Standard on the **Workflow Service Plan** (WS1/WS2/WS3) _always_ requires Azure Files (SMB) for the home directory runtime state (`C:\home`). Azure Files SMB authentication requires `allowSharedKeyAccess: true` on the storage account. If an Azure Policy enforces `allowSharedKeyAccess: false` (common in FDPO / enterprise tenants), the Azure Files mount fails and the runtime cannot start.
+
+> **Microsoft officially confirms** ([docs](https://learn.microsoft.com/en-us/azure/logic-apps/create-single-tenant-workflows-azure-portal#set-up-managed-identity-access-to-your-storage-account)):  
+> *"Currently, you can't disable storage account key access for Standard logic apps that use the Workflow Service Plan hosting option."*
+
+`AzureWebJobsStorage__credentialType=managedIdentity` configures identity-based authentication for **blob/queue/table** operations, but the **Azure Files SMB mount** (`WEBSITE_CONTENTAZUREFILECONNECTIONSTRING`) still requires shared key access. No app-setting workaround (`AzureWebJobsSecretStorageType`, `AzureWebJobsSecretsPath`, etc.) can bypass this.
+
+**Workarounds (choose one):**
+
+| Option | Description |
+|--------|-------------|
+| **Policy exemption** | Request a policy exemption for the storage account in this resource group. Fastest for demo environments. |
+| **App Service Environment v3 (ASEv3)** | Switch hosting to ASEv3 plan, which supports full managed-identity storage without shared key access. Requires infrastructure changes to the App Service Plan. |
+| **Subscription without policy** | Deploy to a subscription/tenant that does not enforce `allowSharedKeyAccess: false`. |
