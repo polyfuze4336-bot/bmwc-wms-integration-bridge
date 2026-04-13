@@ -334,6 +334,67 @@ Runs on a 15-minute schedule. Provides ops visibility without requiring queue po
 
 ---
 
+## Live Demo Environment
+
+The demo environment is **currently deployed** in Azure (Southeast Asia — Singapore):
+
+| Resource | Value |
+|---|---|
+| Resource Group | `rg-bmwc-wms-demo` |
+| APIM Gateway URL | `https://apim-bmwc-wms-2yh2gijmhmpp6.azure-api.net` |
+| Logic App | `la-bmwc-wms-2yh2gijmhmpp6` (Running) |
+| Service Bus | `sb-bmwc-wms-2yh2gijmhmpp6` (Active) |
+
+**Get the APIM subscription key** (needed for all API calls):
+
+```powershell
+$subId = az account show --query id -o tsv
+$keys = az rest --method POST `
+  --url "https://management.azure.com/subscriptions/$subId/resourceGroups/rg-bmwc-wms-demo/providers/Microsoft.ApiManagement/service/apim-bmwc-wms-2yh2gijmhmpp6/subscriptions/bmwc-demo-subscription/listSecrets?api-version=2022-08-01" `
+  -o json | ConvertFrom-Json
+Write-Host "Subscription Key: $($keys.primaryKey)"
+```
+
+### Run a test order (PowerShell)
+
+```powershell
+$APIM_URL = "https://apim-bmwc-wms-2yh2gijmhmpp6.azure-api.net"
+$SUB_KEY  = "<key from above>"
+$ORDER_ID = "ORD-2026-SGP-$(Get-Date -Format 'HHmmss')"   # unique each run
+$CORR_ID  = "test-corr-$(Get-Date -Format 'yyyyMMddHHmmss')"
+
+$body = Get-Content "tests/payloads/01-success-standard.json" | ConvertFrom-Json
+$body.orderId = $ORDER_ID
+
+Invoke-WebRequest -Uri "$APIM_URL/bmwc/orders" `
+  -Method POST `
+  -Headers @{
+      "Ocp-Apim-Subscription-Key" = $SUB_KEY
+      "X-Correlation-ID"          = $CORR_ID
+      "Content-Type"              = "application/json"
+  } `
+  -Body ($body | ConvertTo-Json -Depth 10) `
+  -UseBasicParsing | Select-Object StatusCode, Content
+```
+
+### Run a test order (curl / bash)
+
+```bash
+APIM_URL="https://apim-bmwc-wms-2yh2gijmhmpp6.azure-api.net"
+SUB_KEY="<key from above>"
+ORDER_ID="ORD-2026-SGP-$(date +%H%M%S)"
+
+curl -s -X POST "$APIM_URL/bmwc/orders" \
+  -H "Content-Type: application/json" \
+  -H "Ocp-Apim-Subscription-Key: $SUB_KEY" \
+  -H "X-Correlation-ID: test-corr-$(date +%s)" \
+  -d "$(jq --arg id "$ORDER_ID" '.orderId = $id' tests/payloads/01-success-standard.json)"
+```
+
+See [tests/DEMO-SCRIPT.md](tests/DEMO-SCRIPT.md) for the full presenter walkthrough with all 7 scenarios.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -347,10 +408,8 @@ Runs on a 15-minute schedule. Provides ops visibility without requiring queue po
 ### 1. Clone and configure
 
 ```bash
-git clone <this-repo>
-cd AppLogic
-cp .env.example .env
-# Edit .env: set AZURE_SUBSCRIPTION_ID, APIM_PUBLISHER_EMAIL
+git clone https://github.com/polyfuze4336-bot/bmwc-wms-integration-bridge.git
+cd bmwc-wms-integration-bridge
 ```
 
 ### 2. Start the local WMS mock
@@ -366,12 +425,10 @@ npm start
 
 ### 3. Provision infrastructure
 
-Choose one of the three parameter files, then run:
-
-```bash
+```powershell
 azd auth login
-azd env new demo                                          # or prod-sg / prod-my
-azd env set AZURE_LOCATION southeastasia                  # or malaysiasouth
+azd env new demo
+azd env set AZURE_LOCATION southeastasia
 azd env set WMS_USERNAME bmwc_api
 azd env set WMS_PASSWORD <wms-password>
 azd env set APIM_PUBLISHER_EMAIL ops@bmwc.example.com
@@ -385,36 +442,93 @@ azd provision --parameters infra/main.parameters.prod-sg.json
 
 `azd provision` will:
 1. Deploy all 7 Bicep modules in dependency order
-2. Run `scripts/post-provision.ps1` — wires the APIM Named Value `la-bmwc-ingest-url` to the Logic App trigger callback URL
+2. Run `scripts/post-provision.ps1` automatically — wires APIM Named Value `la-bmwc-ingest-url` to the Logic App trigger URL
 
 ### 4. Deploy Logic App workflows
 
-```bash
-# VS Code — recommended for iterative development
-# Open logic-app/ in VS Code with Azure Logic Apps (Standard) extension → Deploy to Logic App
+The Logic App uses identity-based blob storage (`allowSharedKeyAccess: false`). Workflows must be deployed via blob storage — **not** via Kudu zip deploy.
 
-# CLI zip-deploy — recommended for CI/CD
-cd logic-app
-zip -r ../logicapp-deploy.zip .
-az logicapp deployment source config-zip \
-  --name $LOGIC_APP_NAME \
-  --resource-group $RESOURCE_GROUP_NAME \
-  --src ../logicapp-deploy.zip
+**Step 4a — Grant your user blob data access:**
+
+```powershell
+$storageId = az storage account show `
+  --name <STORAGE_ACCOUNT_NAME> `
+  --resource-group <RESOURCE_GROUP> `
+  --query id -o tsv
+$userId = az ad signed-in-user show --query id -o tsv
+
+az role assignment create `
+  --assignee $userId `
+  --role "Storage Blob Data Contributor" `
+  --scope $storageId
+# Wait ~10 minutes for RBAC to propagate before continuing
+```
+
+**Step 4b — Create deployment container and upload zip:**
+
+```powershell
+# Create the container via ARM (no shared key needed)
+az rest --method PUT `
+  --url "https://management.azure.com$storageId/blobServices/default/containers/deployments?api-version=2023-01-01" `
+  --body '{\"properties\":{\"publicAccess\":\"None\"}}' | Out-Null
+
+# Build and upload the zip
+Compress-Archive -Path "logic-app\*" -DestinationPath "logic-app-deploy.zip" -Force
+
+$token   = az account get-access-token --resource "https://storage.azure.com/" --query accessToken -o tsv
+$account = az storage account show --name <STORAGE_ACCOUNT_NAME> --resource-group <RESOURCE_GROUP> --query name -o tsv
+$uri     = "https://$account.blob.core.windows.net/deployments/logic-app.zip"
+$headers = @{ Authorization="Bearer $token"; "x-ms-version"="2020-04-08"; "x-ms-blob-type"="BlockBlob"; "Content-Type"="application/zip" }
+Invoke-WebRequest -Method PUT -Uri $uri -Headers $headers -Body ([System.IO.File]::ReadAllBytes("logic-app-deploy.zip")) -UseBasicParsing
+```
+
+**Step 4c — Point Logic App at the blob package:**
+
+```powershell
+$blobUrl = "https://$account.blob.core.windows.net/deployments/logic-app.zip"
+az webapp config appsettings set `
+  --name <LOGIC_APP_NAME> `
+  --resource-group <RESOURCE_GROUP> `
+  --settings "WEBSITE_RUN_FROM_PACKAGE=$blobUrl"
+
+# Restart to apply the new package
+az webapp restart --name <LOGIC_APP_NAME> --resource-group <RESOURCE_GROUP>
+```
+
+**Step 4d — Re-run the post-provision hook** to refresh the APIM trigger URL:
+
+```powershell
+$env:RESOURCE_GROUP_NAME = "<RESOURCE_GROUP>"
+$env:LOGIC_APP_NAME      = "<LOGIC_APP_NAME>"
+$env:APIM_NAME           = "<APIM_NAME>"
+$env:AZURE_SUBSCRIPTION_ID = az account show --query id -o tsv
+.\scripts\post-provision.ps1
 ```
 
 ### 5. Run the demo
 
-```bash
-export APIM_GATEWAY_URL="https://apim-bmwc-demo.azure-api.net"
-export APIM_SUBSCRIPTION_KEY="<from APIM portal → Subscriptions>"
+```powershell
+# PowerShell
+$APIM_URL = "https://<apim-name>.azure-api.net"
+$SUB_KEY  = az rest --method POST `
+  --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/resourceGroups/<rg>/providers/Microsoft.ApiManagement/service/<apim>/subscriptions/bmwc-demo-subscription/listSecrets?api-version=2022-08-01" `
+  -o json | ConvertFrom-Json | Select-Object -ExpandProperty primaryKey
 
-# End-to-end bash demo (all 6 scenarios)
-bash tests/curl-demo.sh
+$body = Get-Content "tests/payloads/01-success-standard.json" | ConvertFrom-Json
+$body.orderId = "ORD-2026-SGP-$(Get-Date -Format 'HHmmss')"
 
-# Or open tests/BMWC-WMS-Bridge.postman_collection.json in Postman
+Invoke-WebRequest -Uri "$APIM_URL/bmwc/orders" `
+  -Method POST `
+  -Headers @{"Ocp-Apim-Subscription-Key"=$SUB_KEY;"Content-Type"="application/json"} `
+  -Body ($body | ConvertTo-Json -Depth 10) -UseBasicParsing
 ```
 
-See [tests/DEMO-SCRIPT.md](tests/DEMO-SCRIPT.md) for the full presenter walkthrough.
+```bash
+# bash — run all 7 scenarios end-to-end
+bash tests/curl-demo.sh
+```
+
+Or import `tests/BMWC-WMS-Bridge.postman_collection.json` into Postman and set `apimGatewayUrl` + `subscriptionKey` environment variables.
 
 ### 6. Rotate WMS credentials (production)
 
