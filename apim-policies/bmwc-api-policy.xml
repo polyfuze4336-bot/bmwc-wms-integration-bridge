@@ -45,8 +45,14 @@
         -->
 
         <!-- ── 2. Throttle — protect Logic Apps and Service Bus from burst ── -->
-        <rate-limit calls="100" renewal-period="60" />
-        <quota calls="10000" renewal-period="604800" />
+        <!-- Note: Consumption tier requires rate-limit-by-key / quota-by-key rather than
+             rate-limit / quota (those require Developer/Standard tier and above). -->
+        <rate-limit-by-key calls="100" renewal-period="60"
+            counter-key="@(context.Subscription?.Id ?? &quot;anonymous&quot;)"
+            increment-condition="@(true)" />
+        <quota-by-key calls="10000" renewal-period="604800"
+            counter-key="@(context.Subscription?.Id ?? &quot;anonymous&quot;)"
+            increment-condition="@(true)" />
 
         <!-- ── 3. Content-Type enforcement ──────────────────────────────────
              Reject non-JSON content types before we attempt to read the body.

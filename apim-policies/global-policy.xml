@@ -75,6 +75,6 @@
     </outbound>
 
     <on-error>
-        <base />
+        <!-- Note: <base /> is not valid at global scope — there is no parent policy to inherit from. -->
     </on-error>
 </policies>
