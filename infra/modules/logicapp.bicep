@@ -16,18 +16,13 @@ param resourceToken string     // unique suffix for storage account naming
 param location string
 param tags object
 
-param logicAppSubnetId string  // Subnet delegated to Microsoft.Web/serverFarms
+param aseId string  // Resource ID of the ASEv3 hosting environment (Microsoft.Web/hostingEnvironments)
 
 @secure()
 param serviceBusConnectionString string
 
 param appInsightsConnectionString string
 param keyVaultName string
-
-@minValue(1)
-@maxValue(20)
-@description('Maximum elastic worker count for the WS1 plan. Demo: 3. Production: tune to measured concurrency.')
-param maxElasticWorkers int = 3
 
 @description('Inbound Service Bus queue name. Must match the servicebus.bicep inboundQueueName parameter.')
 param inboundQueueName string = 'wms-inbound'
@@ -50,19 +45,23 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   }
 }
 
-// ── App Service Plan (Workflow Standard) ─────────────────────────────────────
+// ── App Service Plan (IsolatedV2 on ASEv3) ───────────────────────────────────
+// I1v2 is the smallest Isolated tier. The plan is pinned to the ASEv3 via
+// hostingEnvironmentProfile. Elastic scaling is not applicable to Isolated plans;
+// scale out by increasing 'capacity' or adding autoscale rules post-provision.
 resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' = {
   name: planName
   location: location
   tags: tags
   sku: {
-    name: 'WS1'
-    tier: 'WorkflowStandard'
+    name: 'I1v2'
+    tier: 'IsolatedV2'
+    capacity: 1
   }
-  kind: 'elastic'
   properties: {
-    elasticScaleEnabled: true
-    maximumElasticWorkerCount: maxElasticWorkers
+    hostingEnvironmentProfile: {
+      id: aseId
+    }
   }
 }
 
@@ -85,23 +84,12 @@ resource logicApp 'Microsoft.Web/sites@2022-03-01' = {
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'dotnet' }  // Microsoft now requires 'dotnet' for all Standard logic apps
 
         // Storage — identity-based (no shared key; Azure Policy enforced)
-        // ⚠️  KNOWN CONSTRAINT: Logic Apps Standard on Workflow Service Plan (WS1/WS2/WS3)
-        //     REQUIRES Azure Files (SMB) for the home directory runtime state (Sentinels etc.).
-        //     Azure Files SMB authentication requires allowSharedKeyAccess=true on the storage
-        //     account. With allowSharedKeyAccess=false (enforced by Azure Policy in this tenant),
-        //     the Logic App runtime enters Error state: "Access to path C:\home\data\Functions\secrets\Sentinels is denied".
+        // ASEv3 uses NFS mounts for home directory instead of SMB/Azure Files, so
+        // allowSharedKeyAccess: false on the storage account is fully supported here.
+        // Blob, queue, and table access all use credentialType=managedIdentity.
         //
-        //     To deploy in a policy-restricted tenant, choose ONE of:
-        //       (a) Create a policy exemption for the storage account in this resource group.
-        //       (b) Switch to App Service Environment v3 (ASEv3) hosting, which supports
-        //           identity-based storage WITHOUT requiring allowSharedKeyAccess=true.
-        //           Requires changing the App Service Plan to an ASEv3 plan and setting
-        //           WEBSITE_CONTENTAZUREFILECONNECTIONSTRING to use MI auth.
-        //       (c) Deploy to a subscription/tenant without the allowSharedKeyAccess=false policy.
-        //     See: https://learn.microsoft.com/en-us/azure/logic-apps/create-single-tenant-workflows-azure-portal#set-up-managed-identity-access-to-your-storage-account
-        //
-        // AzureWebJobsStorage uses credentialType=managedIdentity (NOT credential=managedIdentity).
-        // The Logic Apps Edge component validates 'credentialType'; 'credential' causes rejection.
+        // Note: credentialType=managedIdentity (NOT credential=managedIdentity).
+        // The Logic Apps Edge component validates 'credentialType'; 'credential' is rejected.
         { name: 'AzureWebJobsStorage__accountName', value: storageAccount.name }
         { name: 'AzureWebJobsStorage__credentialType', value: 'managedIdentity' }
         { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '1' }
@@ -141,9 +129,8 @@ resource logicApp 'Microsoft.Web/sites@2022-03-01' = {
       http20Enabled: true
       netFrameworkVersion: 'v6.0'
     }
-    // Regional VNet integration: all outbound traffic routed through VNet
-    virtualNetworkSubnetId: logicAppSubnetId
-    vnetRouteAllEnabled: true
+    // No VNet integration configuration needed: on ASEv3 the Logic App is inside
+    // the VNet by default (the ASE subnet provides the isolation boundary).
   }
 }
 

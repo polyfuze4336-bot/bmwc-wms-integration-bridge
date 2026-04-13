@@ -278,6 +278,192 @@ resource nsgWmsMock 'Microsoft.Network/networkSecurityGroups@2023-04-01' = {
   }
 }
 
+// ─── NSG: snet-ase ───────────────────────────────────────────────────────────
+// ASEv3 External: the Logic App endpoint is served from a public IP on the ASE.
+// Inbound 443 from Internet must be allowed for APIM → Logic App trigger calls.
+// ASEv3 does NOT require inbound 454/455 (AppServiceManagement) — that was ASEv1/v2;
+// ASEv3 management traffic is routed via private link by the platform.
+resource nsgAse 'Microsoft.Network/networkSecurityGroups@2023-04-01' = {
+  name: 'nsg-snet-ase'
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+
+      // ── Inbound ───────────────────────────────────────────────────────────
+      {
+        name: 'Allow-HTTPS-Inbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '443'
+          description: 'APIM → Logic App trigger endpoint (External ASEv3 public IP)'
+        }
+      }
+      {
+        name: 'Allow-AzureLoadBalancer-Inbound'
+        properties: {
+          priority: 110
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+          description: 'Required for App Service health probes'
+        }
+      }
+      {
+        name: 'Deny-All-Inbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+
+      // ── Outbound ──────────────────────────────────────────────────────────
+      {
+        name: 'Allow-WMS-Mock-SOAP-Outbound'
+        properties: {
+          priority: 100
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '10.10.3.0/24'
+          destinationPortRange: '8080'
+          description: 'Logic App → WMS mock SOAP on port 8080 (demo)'
+        }
+      }
+      {
+        name: 'Allow-PrivateEndpoints-Outbound'
+        properties: {
+          priority: 110
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '10.10.2.0/24'
+          destinationPortRange: '443'
+          description: 'Logic App → Key Vault private endpoint'
+        }
+      }
+      {
+        name: 'Allow-Storage-Outbound'
+        properties: {
+          priority: 120
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'Storage'
+          destinationPortRange: '443'
+          description: 'Logic Apps runtime: Azure Storage (AzureWebJobsStorage, run history, content)'
+        }
+      }
+      {
+        name: 'Allow-ServiceBus-Outbound'
+        properties: {
+          priority: 130
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'ServiceBus'
+          destinationPortRange: '443'
+          description: 'Logic App → Service Bus built-in connector'
+        }
+      }
+      {
+        name: 'Allow-KeyVault-Outbound'
+        properties: {
+          priority: 140
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'AzureKeyVault'
+          destinationPortRange: '443'
+          description: 'Key Vault reference resolution and WMS credential lookup'
+        }
+      }
+      {
+        name: 'Allow-AzureMonitor-Outbound'
+        properties: {
+          priority: 150
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'AzureMonitor'
+          destinationPortRange: '443'
+          description: 'Application Insights telemetry and Log Analytics ingestion'
+        }
+      }
+      {
+        name: 'Allow-AzureActiveDirectory-Outbound'
+        properties: {
+          priority: 160
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'AzureActiveDirectory'
+          destinationPortRange: '443'
+          description: 'Managed Identity token acquisition (Entra ID)'
+        }
+      }
+      {
+        name: 'Allow-AzureCloud-Outbound'
+        properties: {
+          priority: 170
+          direction: 'Outbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'AzureCloud'
+          destinationPortRange: '443'
+          description: 'ASEv3 management plane and any other Azure service traffic'
+        }
+      }
+      {
+        name: 'Deny-Internet-Outbound'
+        properties: {
+          priority: 4096
+          direction: 'Outbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'Internet'
+          destinationPortRange: '*'
+          description: 'No arbitrary internet egress from the ASE subnet'
+        }
+      }
+    ]
+  }
+}
+
 // ─── Virtual Network ──────────────────────────────────────────────────────────
 resource vnet 'Microsoft.Network/virtualNetworks@2023-04-01' = {
   name: name
@@ -328,6 +514,28 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-04-01' = {
           networkSecurityGroup: { id: nsgWmsMock.id }
         }
       }
+      // Subnet 3 — App Service Environment v3 (ASEv3)
+      // ASEv3 requires a dedicated /24 subnet (minimum) delegated exclusively to
+      // Microsoft.Web/hostingEnvironments. No other resources can share this subnet.
+      // Service endpoints allow storage/KV/SB traffic to stay on the Azure backbone.
+      {
+        name: 'snet-ase'
+        properties: {
+          addressPrefix: '10.10.4.0/24'
+          delegations: [
+            {
+              name: 'delegation-ase'
+              properties: { serviceName: 'Microsoft.Web/hostingEnvironments' }
+            }
+          ]
+          serviceEndpoints: [
+            { service: 'Microsoft.ServiceBus' }
+            { service: 'Microsoft.KeyVault'   }
+            { service: 'Microsoft.Storage'    }
+          ]
+          networkSecurityGroup: { id: nsgAse.id }
+        }
+      }
     ]
   }
 }
@@ -337,3 +545,4 @@ output vnetName string = vnet.name
 output logicAppSubnetId string = vnet.properties.subnets[0].id
 output privateEndpointSubnetId string = vnet.properties.subnets[1].id
 output wmsMockSubnetId string = vnet.properties.subnets[2].id
+output aseSubnetId string = vnet.properties.subnets[3].id

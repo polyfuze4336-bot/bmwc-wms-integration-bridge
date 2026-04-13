@@ -95,12 +95,6 @@ param logRetentionDays int = 30
 @description('Log Analytics daily ingestion cap in GB. -1 = unlimited (recommended for production). Default 1 protects demo accounts from unexpected cost.')
 param logDailyQuotaGb int = 1
 
-// ── Logic Apps App Service Plan ───────────────────────────────────────────────
-@minValue(1)
-@maxValue(20)
-@description('Maximum elastic worker count for the WS1 App Service Plan. Demo: 3. Production: set based on observed concurrency.')
-param maxElasticWorkers int = 3
-
 // ── Key Vault hardening ───────────────────────────────────────────────────────
 @minValue(7)
 @maxValue(90)
@@ -200,10 +194,26 @@ module serviceBus 'modules/servicebus.bicep' = {
   }
 }
 
-// ── 5. Logic Apps Standard ────────────────────────────────────────────────────
-// WS1 App Service Plan (WorkflowStandard) with regional VNet integration.
-// Outbound traffic routed through snet-logicapp → allows private WMS and PE access.
-// System-Assigned Managed Identity granted Key Vault Secrets User role at RG scope.
+// ── 5. App Service Environment v3 (External) ─────────────────────────────────
+// Dedicated /24 subnet (snet-ase) in the VNet. 'External' (public IP) so that
+// the Consumption-tier APIM can reach the Logic App trigger without VNet peering.
+// ⚠️  Provisioning takes 1–3 hours. All downstream modules depend on this completing.
+module ase 'modules/ase.bicep' = {
+  scope: rg
+  name:  'ase'
+  params: {
+    name:        'ase-bmwc-wms-${resourceToken}'
+    location:    location
+    tags:        tags
+    aseSubnetId: vnet.outputs.aseSubnetId
+  }
+}
+
+// ── 6. Logic Apps Standard ────────────────────────────────────────────────────
+// I1v2 App Service Plan on ASEv3. System-Assigned Managed Identity granted
+// Key Vault Secrets User role at RG scope.
+// Storage account uses allowSharedKeyAccess: false (Azure Policy compliant)
+// because ASEv3 does not use SMB/Azure Files for the home directory.
 module logicApp 'modules/logicapp.bicep' = {
   scope: rg
   name:  'logicapp'
@@ -213,16 +223,15 @@ module logicApp 'modules/logicapp.bicep' = {
     resourceToken:               resourceToken
     location:                    location
     tags:                        tags
-    logicAppSubnetId:            vnet.outputs.logicAppSubnetId
+    aseId:                       ase.outputs.id
     appInsightsConnectionString: logAnalytics.outputs.appInsightsConnectionString
     serviceBusConnectionString:  serviceBus.outputs.connectionString
     keyVaultName:                keyVault.outputs.name
-    maxElasticWorkers:           maxElasticWorkers
     inboundQueueName:            inboundQueueName
   }
 }
 
-// ── 6. API Management ─────────────────────────────────────────────────────────
+// ── 7. API Management ─────────────────────────────────────────────────────────
 // Consumption SKU — serverless APIM; no VNet injection at this tier.
 // For private APIM (inbound from BMWC on-prem), upgrade to Developer or Premium
 // and add a vnet.bicep subnet + APIM VNet integration params.
@@ -247,7 +256,7 @@ module apim 'modules/apim.bicep' = {
   }
 }
 
-// ── 7. Azure Monitor Alerts ───────────────────────────────────────────────────
+// ── 8. Azure Monitor Alerts ──────────────────────────────────────────────────────
 // Six alert rules: LA run failures, DLQ present, SOAP fault spike,
 // end-to-end latency, enqueue failures, APIM 5xx rate.
 module alerts 'modules/alerts.bicep' = {
