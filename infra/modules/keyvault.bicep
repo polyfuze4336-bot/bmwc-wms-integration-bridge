@@ -20,8 +20,8 @@ param wmsUsername string = ''
 @description('WMS API password. Set via azd env set WMS_PASSWORD. Stored in Key Vault as wms-soap-password.')
 param wmsPassword string = ''
 
-@description('Resource ID of the Logic Apps VNet integration subnet. Locks Key Vault access to VNet-only traffic.')
-param logicAppSubnetId string
+@description('Resource ID of the ASEv3 subnet (snet-ase). Locks Key Vault access to ASE egress traffic only.')
+param aseSubnetId string
 
 @minValue(7)
 @maxValue(90)
@@ -49,9 +49,9 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-02-01' = {
       bypass: 'AzureServices'
       virtualNetworkRules: [
         {
-          // snet-logicapp has Microsoft.KeyVault service endpoint enabled.
-          // Traffic from Logic Apps outbound VNet integration flows through this subnet.
-          id: logicAppSubnetId
+          // snet-ase has Microsoft.KeyVault service endpoint enabled.
+          // On ASEv3, all Logic App outbound traffic originates from this subnet.
+          id: aseSubnetId
           ignoreMissingVnetServiceEndpoint: false
         }
       ]

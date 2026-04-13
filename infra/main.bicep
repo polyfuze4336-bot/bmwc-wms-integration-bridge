@@ -158,7 +158,7 @@ module logAnalytics 'modules/loganalytics.bicep' = {
 // ── 3. Key Vault ──────────────────────────────────────────────────────────────
 // Stores WMS credentials and endpoint URL.
 // Logic App accesses secrets via Key Vault References (no plaintext in app settings).
-// Network ACLs: Deny by default; allow only from snet-logicapp (service endpoint).
+// Network ACLs: Deny by default; allow only from snet-ase (ASEv3 subnet, service endpoint).
 module keyVault 'modules/keyvault.bicep' = {
   scope: rg
   name:  'keyvault'
@@ -169,7 +169,7 @@ module keyVault 'modules/keyvault.bicep' = {
     wmsSoapEndpoint:         wmsSoapEndpoint
     wmsUsername:             wmsUsername
     wmsPassword:             wmsPassword
-    logicAppSubnetId:        vnet.outputs.logicAppSubnetId
+    aseSubnetId:             vnet.outputs.aseSubnetId
     softDeleteRetentionDays: kvSoftDeleteRetentionDays
     enablePurgeProtection:   kvEnablePurgeProtection
   }

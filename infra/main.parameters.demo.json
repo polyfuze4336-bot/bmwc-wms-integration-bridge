@@ -26,8 +26,6 @@
     "logRetentionDays":          { "value": 30 },
     "logDailyQuotaGb":           { "value": 1 },
 
-    "maxElasticWorkers":         { "value": 3 },
-
     "kvSoftDeleteRetentionDays": { "value": 7 },
     "kvEnablePurgeProtection":   { "value": true }
   }
