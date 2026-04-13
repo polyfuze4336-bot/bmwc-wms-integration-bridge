@@ -35,18 +35,6 @@ param allowedClientIps array = []
 @description('Diagnostics sampling percentage forwarded to Application Insights. Demo: 100. Production: 10.')
 param samplingPercentage int = 100
 
-@description('Rate-limit: max calls per subscription key per period.')
-param rateLimitCalls int = 100
-
-@description('Rate-limit renewal window in seconds.')
-param rateLimitPeriod int = 60
-
-@description('Quota: max calls per subscription key per quota period.')
-param quotaCalls int = 10000
-
-@description('Quota period in seconds (default 604800 = 7 days).')
-param quotaPeriod int = 604800
-
 // ── APIM Service ──────────────────────────────────────────────────────────────
 resource apim 'Microsoft.ApiManagement/service@2023-03-01-preview' = {
   name: name
@@ -185,7 +173,7 @@ resource getOrderStatusOp 'Microsoft.ApiManagement/service/apis/operations@2023-
 var ipFilterAddresses = join(map(allowedClientIps, ip => '<address>${ip}</address>'), '')
 var ipFilterXml = empty(allowedClientIps) ? '' : '<ip-filter action="allow">${ipFilterAddresses}</ip-filter>'
 
-var innerPolicy = '${ipFilterXml}<rate-limit-by-key calls="${rateLimitCalls}" renewal-period="${rateLimitPeriod}" counter-key="@(context.Subscription?.Id ?? &quot;anonymous&quot;)" increment-condition="@(true)" /><quota-by-key calls="${quotaCalls}" renewal-period="${quotaPeriod}" counter-key="@(context.Subscription?.Id ?? &quot;anonymous&quot;)" increment-condition="@(true)" /><validate-content unspecified-content-type-action="prevent" max-size="262144" size-exceeded-action="prevent" errors-variable-name="requestBodyErrors"><content type="application/json" validate-as="json" action="prevent" /></validate-content><set-header name="X-Correlation-ID" exists-action="override"><value>@(context.Request.Headers.GetValueOrDefault(&quot;X-Correlation-ID&quot;, context.RequestId.ToString()))</value></set-header><set-backend-service base-url="{{la-bmwc-ingest-url}}" />'
+var innerPolicy = '${ipFilterXml}<validate-content unspecified-content-type-action="prevent" max-size="262144" size-exceeded-action="prevent" errors-variable-name="requestBodyErrors"><content type="application/json" validate-as="json" action="prevent" /></validate-content><set-header name="X-Correlation-ID" exists-action="override"><value>@(context.Request.Headers.GetValueOrDefault(&quot;X-Correlation-ID&quot;, context.RequestId.ToString()))</value></set-header><set-backend-service base-url="{{la-bmwc-ingest-url}}" />'
 
 var fullApiPolicy = '<policies><inbound><base />${innerPolicy}</inbound><backend><forward-request timeout="30" fail-on-error-status-code="false" /></backend><outbound><base /><set-header name="Location" exists-action="delete" /><set-header name="x-ms-workflow-run-id" exists-action="delete" /></outbound><on-error><base /></on-error></policies>'
 

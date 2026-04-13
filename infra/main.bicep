@@ -56,17 +56,7 @@ param allowedClientIps array = []
 @description('APIM diagnostics sampling percentage sent to Application Insights. Demo: 100. Production: 10 to reduce AI ingestion costs.')
 param apimSamplingPercentage int = 100
 
-@description('APIM rate-limit: max calls per subscription key per renewal period.')
-param apimRateLimitCalls int = 100
-
-@description('APIM rate-limit renewal window in seconds. Default 60 (1 minute).')
-param apimRateLimitPeriod int = 60
-
-@description('APIM quota: max calls per subscription key per quota period.')
-param apimQuotaCalls int = 10000
-
-@description('APIM quota period in seconds. Default 604800 (7 days).')
-param apimQuotaPeriod int = 604800
+// Note: rate-limit/quota policies are not supported on Consumption SKU; params removed.
 
 // ── Service Bus ───────────────────────────────────────────────────────────────
 @description('Name of the primary inbound queue. Must match the queue name in workflow JSON parameters.')
@@ -249,10 +239,6 @@ module apim 'modules/apim.bicep' = {
     appInsightsId:                 logAnalytics.outputs.appInsightsId
     allowedClientIps:              allowedClientIps
     samplingPercentage:            apimSamplingPercentage
-    rateLimitCalls:                apimRateLimitCalls
-    rateLimitPeriod:               apimRateLimitPeriod
-    quotaCalls:                    apimQuotaCalls
-    quotaPeriod:                   apimQuotaPeriod
   }
 }
 

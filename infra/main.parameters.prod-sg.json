@@ -20,10 +20,6 @@
 
     "allowedClientIps":          { "value": ["10.0.0.0/8"] },
     "apimSamplingPercentage":    { "value": 10 },
-    "apimRateLimitCalls":        { "value": 500 },
-    "apimRateLimitPeriod":       { "value": 60 },
-    "apimQuotaCalls":            { "value": 5000000 },
-    "apimQuotaPeriod":           { "value": 2592000 },
 
     "inboundQueueName":          { "value": "wms-inbound" },
     "deadLetterQueueName":       { "value": "wms-dead-letter-review" },

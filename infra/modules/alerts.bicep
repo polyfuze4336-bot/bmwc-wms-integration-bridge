@@ -36,7 +36,7 @@ resource alertLogicAppRunsFailed 'Microsoft.Insights/metricAlerts@2018-03-01' = 
       allOf: [
         {
           name: 'FailedRuns'
-          metricName: 'RunsFailed'
+          metricName: 'WorkflowRunsFailed'
           operator: 'GreaterThan'
           threshold: 5
           timeAggregation: 'Total'
@@ -60,7 +60,7 @@ resource alertDlqMessagesPresent 'Microsoft.Insights/scheduledQueryRules@2022-06
     enabled: true
     severity: 2
     evaluationFrequency: 'PT5M'
-    windowSize: 'PT20M'
+    windowSize: 'PT30M'
     scopes: [workspaceId]
     criteria: {
       allOf: [
