@@ -23,7 +23,7 @@ resource alertLogicAppRunsFailed 'Microsoft.Insights/metricAlerts@2018-03-01' = 
   name: 'alert-la-runsfailed-${environmentName}'
   location: 'global'
   properties: {
-    description: 'BMWC WMS Bridge — Logic App run failures exceed 5 in a 5-minute window. Check wms-soap-dispatcher run history and WMS connectivity.'
+    description: 'BMWC WMS Bridge — Logic App workflow run failure rate exceeds 20% in a 5-minute window. Check wms-soap-dispatcher run history and WMS connectivity.'
     severity: 2
     enabled: true
     evaluationFrequency: 'PT1M'
@@ -35,11 +35,11 @@ resource alertLogicAppRunsFailed 'Microsoft.Insights/metricAlerts@2018-03-01' = 
       'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
       allOf: [
         {
-          name: 'FailedRuns'
-          metricName: 'WorkflowRunsFailed'
+          name: 'FailedRunRate'
+          metricName: 'WorkflowRunsFailureRate'
           operator: 'GreaterThan'
-          threshold: 5
-          timeAggregation: 'Total'
+          threshold: 20
+          timeAggregation: 'Average'
           criterionType: 'StaticThresholdCriterion'
         }
       ]
